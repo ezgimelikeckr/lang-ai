@@ -9,6 +9,11 @@ import { sttSupported, ttsSupported, createRecognizer, speak, stopSpeaking } fro
 
 const RATES = { easy: 0.82, medium: 0.95, hard: 1.06 };
 
+// Bu hatalardan sonra otomatik yeniden denemenin anlamı yok → duraklat, kullanıcı karar versin
+const FATAL_MIC_ERRORS = new Set([
+  'not-allowed', 'service-not-allowed', 'audio-capture', 'network', 'language-not-supported',
+]);
+
 export class Session {
   /**
    * opts: { lang, level, mode, scenario, topic, difficulty, correctionMode,
@@ -26,6 +31,9 @@ export class Session {
     this.durationSec = 0;
     this.ended = false;
     this.wantListening = false;
+    this.recActive = false;
+    this.lastRecStart = 0;
+    this.quickEnds = 0;      // art arda "hemen kapanan" dinleme sayısı
     this.rec = null;
     this.timer = null;
   }
@@ -50,7 +58,9 @@ export class Session {
     this.setState('thinking');
     try {
       const res = await api.chat({ ...this.opts, history: [], start: true });
+      if (this.ended) return;
       this.pushAssistant(res.reply);
+      if (this.state === 'paused') return;
       await this.speakReply(res.reply);
       this.startMic();
     } catch (e) {
@@ -83,7 +93,7 @@ export class Session {
     if (this.ended || this.state !== 'paused') return;
     // Devam ederken yapay zekânın son mesajını tekrar dinletmek yerine
     // doğrudan dinlemeye geç (kullanıcı söz hakkına sahip).
-    this.setState('listening');
+    this.quickEnds = 0;
     this.startMic();
   }
 
@@ -105,14 +115,33 @@ export class Session {
 
   // ── Mikrofon ───────────────────────────────────────────────────
 
+  /** Mikrofon kullanılamıyor: sessizce takılmak yerine duraklat ve nedenini göster. */
+  micUnavailable(message) {
+    this.wantListening = false;
+    if (!this.ended) this.setState('paused');
+    this.cb.onError?.(message);
+  }
+
   ensureRecognizer() {
     if (this.rec) return;
     this.rec = createRecognizer(this.langInfo.sttLang, {
       onFinal: (text) => this.handleFinalTranscript(text),
       onInterim: (text) => this.cb.onInterim?.(text),
-      onError: (err) => this.cb.onError?.(err.message),
+      onError: (err) => {
+        if (FATAL_MIC_ERRORS.has(err.code)) this.micUnavailable(err.message);
+        else this.cb.onError?.(err.message);
+      },
       onEnd: () => {
         this.recActive = false;
+
+        // Dinleme başlar başlamaz kapanıyorsa (mikrofon açılamıyor) sonsuz döngüye girme
+        if (Date.now() - this.lastRecStart < 1500) this.quickEnds++;
+        else this.quickEnds = 0;
+        if (this.wantListening && this.quickEnds >= 5) {
+          this.micUnavailable('Mikrofon sürekli kapanıyor. İzinleri, seçili mikrofonu ve internet bağlantısını kontrol edip duraklat/devam düğmesine bas.');
+          return;
+        }
+
         // Otomatik yeniden dinleme: kullanıcıya düşünme/cevap süresi tanır.
         if (this.wantListening && !this.ended) {
           setTimeout(() => {
@@ -126,16 +155,30 @@ export class Session {
   tryStartRec() {
     if (this.recActive) return;
     try {
+      this.lastRecStart = Date.now();
       this.rec.start();
       this.recActive = true;
-    } catch {
-      // zaten çalışıyor — sorun değil
+    } catch (e) {
+      // Önceki oturum henüz kapanmadıysa (InvalidStateError) onEnd yeniden deneyecek.
+      console.debug('[SR] start() atladı:', e.name);
     }
   }
 
   startMic() {
-    if (this.ended || !sttSupported || this.helpActive) return;
-    this.ensureRecognizer();
+    if (this.ended || this.helpActive) return;
+
+    if (!sttSupported) {
+      return this.micUnavailable('Bu tarayıcı konuşma tanımayı desteklemiyor. Chrome veya Edge kullanın.');
+    }
+    if (!window.isSecureContext) {
+      return this.micUnavailable('Mikrofon yalnızca https:// veya http://localhost üzerinde çalışır. Uygulamayı localhost adresinden aç.');
+    }
+    try {
+      this.ensureRecognizer();
+    } catch (e) {
+      return this.micUnavailable(e.message);
+    }
+
     this.wantListening = true;
     this.setState('listening');
     this.tryStartRec();
@@ -144,8 +187,8 @@ export class Session {
   stopMic() {
     this.wantListening = false;
     if (this.rec) {
+      // recActive'i burada sıfırlamıyoruz: gerçek kapanışı onend bildirir.
       try { this.rec.stop(); } catch { /* yoksay */ }
-      this.recActive = false;
     }
   }
 
@@ -189,12 +232,13 @@ export class Session {
       // devam edildiğinde kullanıcı söz hakkına sahip olur.
       if (this.state === 'paused') return;
       await this.speakReply(res.reply);
+      if (this.state === 'paused') return; // seslendirme sırasında duraklatıldıysa mikrofonu açma
       this.startMic();
     } catch (e) {
       if (this.ended) return;
       this.cb.onError?.(e.message);
       // Hata olsa da sohbeti kilitleme — dinlemeye dön
-      this.startMic();
+      if (this.state !== 'paused') this.startMic();
     }
   }
 
