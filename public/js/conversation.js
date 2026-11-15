@@ -57,7 +57,7 @@ export class Session {
     this.startTimer();
     this.setState('thinking');
     try {
-      const res = await api.chat({ ...this.opts, history: [], start: true });
+      const res = await api.chat({ ...this.opts, language: this.opts.lang, history: [], start: true });
       if (this.ended) return;
       this.pushAssistant(res.reply);
       if (this.state === 'paused') return;
@@ -216,7 +216,7 @@ export class Session {
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m) => ({ role: m.role, content: m.text }));
 
-      const res = await api.chat({ ...this.opts, history, userMessage: text });
+      const res = await api.chat({ ...this.opts, language: this.opts.lang, history, userMessage: text });
 
       if (this.ended) return;
 

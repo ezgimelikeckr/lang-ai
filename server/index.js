@@ -10,7 +10,7 @@ import {
   buildSystemPrompt,
   buildHelpPrompt,
   buildAnalysisPrompt,
-  START_INSTRUCTION,
+  buildStartInstruction,
   MODE_LABELS,
   SCENARIOS,
 } from './prompts.js';
@@ -32,6 +32,21 @@ function validateSessionParams(body) {
   if (!['easy', 'medium', 'hard'].includes(difficulty)) return 'Geçersiz zorluk.';
   if (!['instant', 'end'].includes(correctionMode)) return 'Geçersiz düzeltme modu.';
   return null;
+}
+
+/**
+ * Sohbet cevabını ayrıştırır. Model JSON yerine düz metin döndürürse
+ * konuşma kopmasın diye ham metni cevap olarak kullanır (düzeltme olmadan).
+ */
+function parseChatReply(raw) {
+  try {
+    return extractJson(raw);
+  } catch (e) {
+    console.error('[/api/chat] JSON okunamadı:', e.message);
+    console.error('[/api/chat] Ham cevap:', String(raw).slice(0, 500));
+    const plain = String(raw).replace(/```[\s\S]*?```/g, '').trim();
+    return { reply: plain, correction: null, phrase_tip: null };
+  }
 }
 
 // ── Durum kontrolü ───────────────────────────────────────────────
@@ -64,13 +79,14 @@ app.post('/api/chat', async (req, res) => {
 
     const messages = [{ role: 'system', content: system }, ...trimmed];
     if (start) {
-      messages.push({ role: 'user', content: START_INSTRUCTION });
+      messages.push({ role: 'user', content: buildStartInstruction({ mode, level, topic }) });
     } else {
       messages.push({ role: 'user', content: userMessage.trim() });
     }
 
-    const raw = await chat(messages);
-    const parsed = extractJson(raw);
+    // Açılışta daha yaratıcı (her seferinde farklı) olsun
+    const raw = await chat(messages, { temperature: start ? 1.0 : 0.7 });
+    const parsed = parseChatReply(raw);
 
     res.json({
       reply: typeof parsed.reply === 'string' ? parsed.reply : '',
@@ -122,13 +138,28 @@ app.post('/api/analyze', async (req, res) => {
       corrections: Array.isArray(corrections) ? corrections : [],
     });
 
-    const raw = await chat([{ role: 'user', content: system }], { temperature: 0.5, maxTokens: 1200 });
+    const raw = await chat([{ role: 'user', content: system }], { temperature: 0.5, maxTokens: 1600 });
     const parsed = extractJson(raw);
+
+    const practiceTopics = Array.isArray(parsed.practice_topics)
+      ? parsed.practice_topics
+          .filter((t) => t && t.topic_tr)
+          .slice(0, 5)
+          .map((t) => ({
+            topic_tr: String(t.topic_tr),
+            why_tr: String(t.why_tr || ''),
+            example: t.example && t.example.wrong
+              ? { wrong: String(t.example.wrong), right: String(t.example.right || '') }
+              : null,
+            exercise_tr: String(t.exercise_tr || ''),
+          }))
+      : [];
 
     res.json({
       summary_tr: parsed.summary_tr || '',
       strengths_tr: Array.isArray(parsed.strengths_tr) ? parsed.strengths_tr : [],
       improvements_tr: Array.isArray(parsed.improvements_tr) ? parsed.improvements_tr : [],
+      practice_topics: practiceTopics,
       new_phrases: Array.isArray(parsed.new_phrases) ? parsed.new_phrases.filter((p) => p && p.phrase) : [],
     });
   } catch (e) {
