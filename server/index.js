@@ -13,6 +13,8 @@ import {
   buildStartInstruction,
   getFocus,
   pickFocus,
+  rampHint,
+  greetingStep,
   LEVEL_SHORT,
   MODE_LABELS,
   SCENARIOS,
@@ -90,13 +92,17 @@ app.post('/api/chat', async (req, res) => {
 
     const lvl = LEVELS.includes(level) ? level : 'A2';
 
+    // Kaçıncı konuşma sırası? (0 = açılış) — kademeli zorlaşma için
+    const userTurns = (Array.isArray(history) ? history : []).filter((m) => m && m.role === 'user').length;
+    const turn = start ? 0 : userTurns + 1;
+
     // Seans konusu: istemci gönderdiyse onu kullan, açılışta rastgele seç
     let focus = getFocus(focusId);
     if (!focus && start) focus = pickFocus(lvl, language);
 
-    console.log(`[chat] ${language} ${lvl} ${mode} ${difficulty} konu=${focus ? focus.id : '-'}${start ? ' (açılış)' : ''}`);
+    console.log(`[chat] ${language} ${lvl} ${mode} ${difficulty} konu=${focus ? focus.id : '-'} tur=${turn}${start ? ' (açılış)' : ''}`);
 
-    const system = buildSystemPrompt({ language, level: lvl, mode, scenario, topic, difficulty, correctionMode, focus });
+    const system = buildSystemPrompt({ language, level: lvl, mode, scenario, topic, difficulty, correctionMode, focus, turn });
 
     // Geçmişi 30 mesajla sınırla (token ekonomisi).
     // Asistan mesajları JSON biçiminde gönderilir; model aynı biçimi sürdürsün.
@@ -122,7 +128,7 @@ app.post('/api/chat', async (req, res) => {
     // Her turda seviye ve biçim hatırlatması (modelin seviyeden kaymasını önler)
     messages.push({
       role: 'system',
-      content: `Reminder: answer with ONE JSON object only (keys: reply, reply_tr, correction, phrase_tip). Stay strictly at CEFR level ${lvl}: ${LEVEL_SHORT[lvl]}. ${focus ? `Keep steering toward today's focus: ${focus.en}. ` : ''}Do not repeat an earlier question.`,
+      content: `Reminder: answer with ONE JSON object only (keys: reply, reply_tr, hint, correction, phrase_tip). Stay strictly at CEFR level ${lvl}: ${LEVEL_SHORT[lvl]}. ${focus ? `Keep steering toward today's focus: ${focus.en}. ` : ''}Do not repeat an earlier question. ${rampHint(turn, lvl)} ${greetingStep(turn, lvl, mode)}`,
     });
 
     // Açılışta daha yaratıcı (her seferinde farklı) olsun
@@ -132,6 +138,7 @@ app.post('/api/chat', async (req, res) => {
     res.json({
       reply: str(parsed.reply),
       reply_tr: str(parsed.reply_tr),
+      hint: parsed.hint && parsed.hint.phrase ? { phrase: str(parsed.hint.phrase), meaning_tr: str(parsed.hint.meaning_tr) } : null,
       correction: sanitizeCorrection(parsed.correction),
       phrase_tip: parsed.phrase_tip && parsed.phrase_tip.phrase ? parsed.phrase_tip : null,
       focus: focus ? { id: focus.id, tr: focus.tr, kind: focus.kind } : null,

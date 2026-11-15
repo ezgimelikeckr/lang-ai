@@ -146,6 +146,48 @@ export function pickFocus(level, language) {
   return pool.length ? pick(pool) : null;
 }
 
+/**
+ * Kademeli başlangıç: konuşma yavaş yavaş zorlaşır, ama her seviyede farklıdır
+ * (A1'de tek kelimelik sorular, C1'de hafif ama doğal ve açık uçlu sorular).
+ * turn = öğrencinin şu ana kadarki (ve şimdiki) konuşma sırası; 0 = açılış.
+ */
+export function rampHint(turn, level) {
+  const band = levelBand(level);
+  if (turn <= 2) {
+    if (band === 'low') return 'WARM-UP turn (beginner): ask only a very easy question that can be answered with ONE word or a short phrase (yes/no, either/or, or a choice of 2-3 options that you give). No challenges yet.';
+    if (band === 'mid') return 'WARM-UP turn (intermediate): ask an easy, familiar personal question that can be answered with one simple sentence (today, the weekend, food, plans). No yes/no-only questions and no challenges yet.';
+    return 'WARM-UP turn (advanced): ask a light, natural, open question about a familiar everyday topic that can be answered in one or two sentences, in a relaxed conversational register. Not a yes/no or choice question, and no heavy abstract topics yet.';
+  }
+  if (turn <= 5) {
+    if (band === 'low') return 'BUILDING turn (beginner): ask an easy short-answer question; offer a ready-made sentence starter when helpful (e.g. "I like … because …?"). Keep any focus-topic nudge very light.';
+    if (band === 'mid') return 'BUILDING turn (intermediate): ask for a short reason or a small story ("Why …?", "What happened next?"); a sentence starter is optional. Keep any focus-topic nudge light.';
+    return 'BUILDING turn (advanced): ask for an opinion with a little nuance and follow up on what the learner just said. Keep any focus-topic nudge light.';
+  }
+  if (band === 'low') return 'FULL turn (beginner): normal questions within the beginner limits; a tiny focus challenge is allowed (at most one every 3 turns).';
+  if (band === 'mid') return 'FULL turn (intermediate): opinions, comparisons and "what if" questions; a focus challenge is allowed (at most one every 3 turns).';
+  return 'FULL turn (advanced): probing, abstract and challenging questions, politely pushing back on ideas; a focus challenge is allowed (at most one every 3 turns).';
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Klasik başlangıç senaryosu (okulda öğrendiğimiz gibi):
+// A1–A2 seviyesinde günlük/serbest sohbet selamlaşma ile başlar.
+// ─────────────────────────────────────────────────────────────────
+const GREETING_STEPS = [
+  'Step 1 — Greeting: say hello and ask how the learner is (English: "Hello! How are you?").',
+  'Step 2 — Name: react to their answer ("Great!", "Nice!"); if they asked "And you?", say in one short sentence that you are fine too; then ask their name (English: "What\'s your name?").',
+  'Step 3 — Origin: say "Nice to meet you, <their name>!" and ask where they are from (English: "Where are you from?").',
+  'Step 4 — About them: react briefly (e.g. "Oh, Turkey! Nice."), then ask ONE simple personal question: their age OR whether they are a student or work (English: "How old are you?" or "Are you a student?").',
+  'Step 5 — Likes or family: react briefly, then ask ONE classic question: "Do you have brothers or sisters?" OR "What do you like to do in your free time?" (in the target language).',
+  'The classic script is finished. React to their last answer, then move on smoothly to everyday conversation and today\'s mini-lesson focus. From now on follow the normal level and ramp rules.',
+];
+
+/** Bu tur için klasik senaryo adımı (yoksa boş metin). turn: 0 = açılış. */
+export function greetingStep(turn, level, mode) {
+  if (levelBand(level) !== 'low') return '';
+  if (mode !== 'daily' && mode !== 'free') return '';
+  return GREETING_STEPS[turn] || '';
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Ana sohbet promptu
 // ─────────────────────────────────────────────────────────────────
@@ -158,6 +200,7 @@ export function buildSystemPrompt({
   difficulty,
   correctionMode,
   focus,
+  turn = 0,
 }) {
   const langName = LANGUAGE_NAMES[language] || language;
   const levelGuide = LEVEL_GUIDE[level] || LEVEL_GUIDE.A2;
@@ -180,10 +223,26 @@ export function buildSystemPrompt({
     ? 'The learner sees corrections immediately, shown quietly next to their message — they are NOT read aloud.'
     : 'The learner sees corrections only at the end of the session, so they are NOT read aloud and should never interrupt the flow.';
 
+  const band = levelBand(level);
+  const scriptStep = greetingStep(turn, level, mode);
+  const scriptBlock = scriptStep
+    ? `
+CLASSIC BEGINNER SCRIPT — this learner is a beginner who wants the classic school-style start (greeting, name, origin, age, family/hobbies). Follow ONE step per turn, in order. This script OVERRIDES any opening instructions of the mode.
+- NOW: ${scriptStep}
+- If the learner asks you something back (e.g. "And you?"), answer in ONE very short sentence first, then continue with the script. This lets the learner practise real exchanges.
+- Use simple textbook phrasing. The "hint" must be the classic model answer to your question (e.g. "I'm fine, thank you. And you?", "My name is Ali.", "I'm from Turkey."), using a made-up example name.
+`
+    : '';
+  const hintStyle = band === 'low'
+    ? 'one short sentence, EASIER than the level limits'
+    : band === 'mid'
+      ? 'one natural sentence at the learner\'s level'
+      : 'a natural, idiomatic answer at the learner\'s level (do NOT simplify it)';
+
   const focusBlock = focus
     ? `
 SESSION FOCUS — today's mini-lesson topic: "${focus.tr}" = ${focus.en} [${focus.kind === 'vocab' ? 'vocabulary' : 'grammar'}]
-- Steer the whole conversation so the learner NATURALLY needs to use this ${focus.kind === 'vocab' ? 'vocabulary' : 'grammar point'}. Ask questions that invite it, and every 2-3 turns give a tiny challenge such as "Can you tell me about …, using …?".
+- Steer the whole conversation so the learner NATURALLY needs to use this ${focus.kind === 'vocab' ? 'vocabulary' : 'grammar point'}. During the warm-up just use it naturally in your own sentences. Once warmed up (see CONVERSATION RAMP), ask questions that invite it and now and then give a tiny challenge such as "Can you tell me about …, using …?".
 - Use the target language correctly in your own replies (so the learner hears good examples), but NEVER explain grammar rules inside "reply".
 ${focus.kind === 'vocab' ? '- Introduce 1-2 useful new words of this theme naturally, and put them in "phrase_tip".\n' : ''}- Mistakes about this focus are the most important ones to correct.
 `
@@ -204,7 +263,12 @@ HOW YOU SPEAK
 - ${diffGuide}
 - If the learner struggles or answers very briefly, slow down, simplify and offer a choice ("Do you like tea or coffee?") — but never translate to Turkish in "reply".
 - As the conversation goes well, you may stretch slightly, but never beyond the level limits.
-${focusBlock}
+
+CONVERSATION RAMP — be gentle: speaking is the hardest skill, so build up step by step
+- Learner turns so far: ${turn}. ${rampHint(turn, level)}
+- If the learner's last answer was very short, hesitant, off-topic or in Turkish, make your next question EASIER (for A1–A2 a choice question; for higher levels a more concrete, personal question) and encourage them warmly. Never push harder when they struggle.
+- Never ask two things at once, and in the first turns never ask the learner to "explain" or "tell me about" something.
+${scriptBlock}${focusBlock}
 ${modeInstruction}
 
 ERROR CORRECTION — fill the "correction" JSON field
@@ -216,10 +280,13 @@ ERROR CORRECTION — fill the "correction" JSON field
 - NEVER mention or echo the correction inside "reply"; just continue the conversation naturally.
 - ${correctionVisibility}
 
+HINT — ALWAYS fill the "hint" field: one very simple example answer the learner could say to your question (${hintStyle}, in ${langName}), with its Turkish meaning. It helps learners who freeze when speaking.
+
 OUTPUT FORMAT — reply with ONLY one valid JSON object. No markdown, no code fences, no extra text. Even if the learner's message is short or unclear, you MUST answer with this JSON object:
 {
   "reply": "<your spoken reply in ${langName}, strictly within the level limits, ending with ONE question>",
   "reply_tr": "<natural Turkish translation of your reply>",
+  "hint": { "phrase": "<example answer in ${langName}>", "meaning_tr": "<Türkçe anlamı>" },
   "correction": null,
   "phrase_tip": null
 }
@@ -319,11 +386,22 @@ export function buildStartInstruction({ mode, level, topic, focus } = {}) {
     seed = `Opening topic for this session: ${pick(OPENING_TOPICS[levelBand(level)])}. Opening style: ${pick(OPENING_STYLES)}.`;
   }
 
+  const band = levelBand(level);
+  const warmup = band === 'low'
+    ? 'Make the first question a very easy warm-up (yes/no or either/or) that needs only one word to answer.'
+    : band === 'mid'
+      ? 'Make the first question an easy, familiar personal question that can be answered with one simple sentence.'
+      : 'Make the first question a light, natural, open question about a familiar topic, answerable in one or two sentences (not yes/no).';
+
+  if (greetingStep(0, level, mode)) {
+    return `(The conversation is just beginning. Produce the opening turn now. ${greetingStep(0, level, mode)} Use one or two very short sentences, nothing else. Reply with the JSON object; "hint" must be the classic model answer (e.g. English: "I'm fine, thank you. And you?"), and set "correction": null and "phrase_tip": null.)`;
+  }
+
   const focusSeed = focus
-    ? ` Today's mini-lesson focus is "${focus.en}": make your opening question invite the learner to use it.`
+    ? ` Today's mini-lesson focus is "${focus.en}": do NOT make the learner produce it yet — just use it naturally in your own greeting sentence.`
     : '';
 
-  return `(The conversation is just beginning. Produce the opening turn now. ${seed}${focusSeed} This overrides any default opening question in your mode instructions — do NOT simply ask "how are you" or "what have you been up to". Stay strictly within the learner's level limits. Reply with the JSON object and set "correction": null and "phrase_tip": null.)`;
+  return `(The conversation is just beginning. Produce the opening turn now. ${seed}${focusSeed} This overrides any default opening question in your mode instructions — do NOT simply ask "how are you" or "what have you been up to". ${warmup} Stay strictly within the learner's level limits. Reply with the JSON object (including "hint") and set "correction": null and "phrase_tip": null.)`;
 }
 
 // Eski ad uyumluluk için
