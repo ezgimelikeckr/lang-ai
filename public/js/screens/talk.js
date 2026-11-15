@@ -30,6 +30,7 @@ export function render(root, params) {
 
   let customStatus = null;
   let helpOpen = false;
+  const openHints = new Set(); // açılmış ipuçları
 
   const screen = el(`
     <div class="screen talk-layout">
@@ -57,6 +58,7 @@ export function render(root, params) {
       <div class="talk-controls">
         <div class="status-pill" id="status-pill"><span class="dot"></span><span id="status-label">Hazırlanıyor…</span></div>
         <div class="interim-text" id="interim"></div>
+        <button class="btn ghost small" id="done-btn" style="display:none;margin:0 auto 8px">✓ Bitirdim, gönder</button>
         <div class="mic-row">
           <button class="ctrl-btn help" id="help-btn" title="Konuşma yardımı — ne söyleyeceğini hatırlamıyorsan">${icon('help')}</button>
           <button class="mic-btn" id="mic-btn" title="Duraklat / devam et">
@@ -81,7 +83,10 @@ export function render(root, params) {
     onStateChange: (state) => updateUi(),
     onFocus: (f) => { $('focus-label').textContent = f ? ` · 🎯 ${f.tr}` : ''; },
     onMessagesChanged: () => renderTranscript(),
-    onInterim: (text) => { $('interim').textContent = text; },
+    onInterim: (text) => {
+      $('interim').textContent = text;
+      $('done-btn').style.display = text ? '' : 'none';
+    },
     onTick: (sec) => { $('timer').textContent = fmtClock(sec); },
     onError: (msg) => toast(msg, 'error', 6000),
     onEnded: (sessionObj) => {
@@ -108,15 +113,35 @@ export function render(root, params) {
         const trLine = m.tr
           ? `<div style="margin-top:7px;padding-top:7px;border-top:1px dashed var(--border);font-size:.84rem;opacity:.75">🇹🇷 ${escapeHtml(m.tr)}</div>`
           : '';
-        transcript.appendChild(el(`<div class="msg"><div class="who">${info.name} Partneri</div><div class="bubble">${escapeHtml(m.text)}${trLine}</div></div>`));
+        transcript.appendChild(el(`<div class="msg"><div class="who">${session.persona ? `${session.persona.emoji} ${escapeHtml(session.persona.name)}` : `${info.name} Partneri`}</div><div class="bubble">${escapeHtml(m.text)}${trLine}</div></div>`));
         if (m.phraseTip) {
           const pill = el(`
             <div class="phrase-tip">💡 <b>${escapeHtml(m.phraseTip.phrase)}</b> — ${escapeHtml(m.phraseTip.meaning_tr)}
               <button title="Dinle">${icon('speaker')}</button></div>`);
           pill.querySelector('button').addEventListener('click', () =>
-            speak(m.phraseTip.phrase, info.ttsLang, { rate: 0.9, voiceURI: config.voiceURI })
+            session.speakSample(m.phraseTip.phrase, info.ttsLang, { rate: 0.9, voiceURI: config.voiceURI })
           );
           transcript.appendChild(pill);
+        }
+        // İpucu: yalnızca sıra sendeyken (son mesaj partnerin) gösterilir
+        if (m.hint && m === session.messages[session.messages.length - 1]) {
+          const hintBox = el('<div style="margin:6px 0 2px"></div>');
+          const drawHint = () => {
+            if (openHints.has(m)) {
+              hintBox.innerHTML = `<div class="phrase-tip">💡 <b>${escapeHtml(m.hint.phrase)}</b>${m.hint.meaning_tr ? ` — ${escapeHtml(m.hint.meaning_tr)}` : ''} <button title="Dinle">${icon('speaker')}</button></div>`;
+              hintBox.querySelector('button').addEventListener('click', () =>
+                session.speakSample(m.hint.phrase, info.ttsLang, { rate: 0.9, voiceURI: config.voiceURI })
+              );
+            } else {
+              hintBox.innerHTML = '<button class="btn ghost small">💡 Ne diyeceğimi bilmiyorum — ipucu</button>';
+              hintBox.querySelector('button').addEventListener('click', () => {
+                openHints.add(m);
+                drawHint();
+              });
+            }
+          };
+          drawHint();
+          transcript.appendChild(hintBox);
         }
       }
     });
@@ -134,7 +159,7 @@ export function render(root, params) {
       </div>`);
     const listen = el(`<div class="row" style="margin-top:6px"><button class="btn ghost small">🔊 Doğrusunu dinle</button></div>`);
     listen.querySelector('button').addEventListener('click', () =>
-      speak(c.corrected, info.ttsLang, { rate: 0.85, voiceURI: config.voiceURI })
+      session.speakSample(c.corrected, info.ttsLang, { rate: 0.85, voiceURI: config.voiceURI })
     );
     card.appendChild(listen);
     return card;
@@ -154,10 +179,15 @@ export function render(root, params) {
     micBtn.innerHTML = state === 'speaking' && !customStatus
       ? '<span class="eq"><span></span><span></span><span></span><span></span></span>'
       : icon('mic');
-    if (state === 'paused') $('interim').textContent = '';
+    if (state === 'paused') {
+      $('interim').textContent = '';
+      $('done-btn').style.display = 'none';
+    }
   }
 
   // ── Kontroller ─────────────────────────────────────────────────
+  $('done-btn').addEventListener('click', () => session.finishNow());
+
   micBtn.addEventListener('click', () => {
     if (helpOpen) return;
     if (session.state === 'paused') session.resume();

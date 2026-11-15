@@ -9,6 +9,9 @@ import { sttSupported, ttsSupported, createRecognizer, speak, stopSpeaking } fro
 
 const RATES = { easy: 0.9, medium: 1.0, hard: 1.06 };
 
+// Konuşman bitti sayılmadan önce beklenen sessizlik (ms): yeni başlayanlar düşünmek için daha uzun süre alır
+const SILENCE_MS = { A1: 3200, A2: 3000, B1: 2600, B2: 2400, C1: 2000, C2: 1800 };
+
 // Bu hatalardan sonra otomatik yeniden denemenin anlamı yok → duraklat, kullanıcı karar versin
 const FATAL_MIC_ERRORS = new Set([
   'not-allowed', 'service-not-allowed', 'audio-capture', 'network', 'language-not-supported',
@@ -37,6 +40,7 @@ export class Session {
     this.rec = null;
     this.timer = null;
     this.focus = null;       // {id, tr, kind} — seansın mini ders konusu
+    this.persona = null;     // {id, name, emoji, voice, gender} — konuşma partneri karakteri
   }
 
   get langInfo() {
@@ -62,6 +66,7 @@ export class Session {
         ...this.opts,
         language: this.opts.lang,
         focus: this.opts.focusId,
+        persona: this.opts.personaId,
         history: [],
         start: true,
       });
@@ -70,7 +75,11 @@ export class Session {
         this.focus = res.focus;
         this.cb.onFocus?.(this.focus);
       }
-      this.pushAssistant(res.reply, null, res.reply_tr);
+      if (res.persona) {
+        this.persona = res.persona;
+        this.cb.onPersona?.(this.persona);
+      }
+      this.pushAssistant(res.reply, null, res.reply_tr, res.hint);
       if (this.state === 'paused') return;
       await this.speakReply(res.reply);
       this.startMic();
@@ -136,6 +145,7 @@ export class Session {
   ensureRecognizer() {
     if (this.rec) return;
     this.rec = createRecognizer(this.langInfo.sttLang, {
+      getSilenceMs: () => SILENCE_MS[this.opts.level] || 2500,
       onFinal: (text) => this.handleFinalTranscript(text),
       onInterim: (text) => this.cb.onInterim?.(text),
       onError: (err) => {
@@ -195,6 +205,11 @@ export class Session {
     this.tryStartRec();
   }
 
+  /** "Bitirdim" düğmesi: sessizliği beklemeden konuştuğun metni hemen gönderir. */
+  finishNow() {
+    if (this.state === 'listening' && this.rec && this.rec.flushNow) this.rec.flushNow();
+  }
+
   stopMic() {
     this.wantListening = false;
     if (this.rec) {
@@ -206,7 +221,7 @@ export class Session {
   // ── Mesaj akışı ────────────────────────────────────────────────
 
   handleFinalTranscript(text) {
-    if (this.ended || this.state !== 'listening' || !text.trim()) return;
+    if (this.ended || this.helpActive || this.state !== 'listening' || !text.trim()) return;
     this.stopMic(); // yapay zekâ sesini mikrofon duymasın
     this.cb.onInterim?.('');
     this.sendUserMessage(text.trim());
@@ -231,6 +246,7 @@ export class Session {
         ...this.opts,
         language: this.opts.lang,
         focus: this.focus ? this.focus.id : undefined,
+        persona: this.persona ? this.persona.id : undefined,
         history,
         userMessage: text,
       });
@@ -244,7 +260,7 @@ export class Session {
       if (res.phrase_tip) {
         this.phraseTips.push(res.phrase_tip);
       }
-      this.pushAssistant(res.reply, res.phrase_tip, res.reply_tr);
+      this.pushAssistant(res.reply, res.phrase_tip, res.reply_tr, res.hint);
       // Duraklatma sırasında seslendirme yapma; cevap ekranda görünür,
       // devam edildiğinde kullanıcı söz hakkına sahip olur.
       if (this.state === 'paused') return;
@@ -264,16 +280,32 @@ export class Session {
     this.sendUserMessage(phrase);
   }
 
-  pushAssistant(text, phraseTip = null, tr = '') {
+  pushAssistant(text, phraseTip = null, tr = '', hint = null) {
     if (!text) return;
-    this.messages.push({ role: 'assistant', text, tr, phraseTip });
+    this.messages.push({ role: 'assistant', text, tr, hint, phraseTip });
     this.cb.onMessagesChanged?.();
+  }
+
+  /**
+   * Örnek cümleyi (ipucu, düzeltme) dinletir. Mikrofon açıksa geçici olarak
+   * kapatır; böylece uygulama kendi sesini senin cümlen sanıp göndermez.
+   */
+  async speakSample(text, ttsLang, opts) {
+    const resume = this.state === 'listening' && !this.helpActive && !this.ended;
+    if (resume) this.stopMic();
+    await speak(text, ttsLang, { locale: this.persona?.voice, gender: this.persona?.gender, ...opts });
+    if (resume && !this.ended && this.state === 'listening') this.startMic();
   }
 
   async speakReply(text) {
     if (!text) return;
     this.setState('speaking');
-    await speak(text, this.langInfo.ttsLang, { rate: this.ttsRate, voiceURI: this.opts.voiceURI });
+    await speak(text, this.langInfo.ttsLang, {
+      rate: this.ttsRate,
+      voiceURI: this.opts.voiceURI,
+      locale: this.persona?.voice,
+      gender: this.persona?.gender,
+    });
   }
 
   // ── Seans özeti ────────────────────────────────────────────────
@@ -301,6 +333,7 @@ export class Session {
       correctionMode: this.opts.correctionMode,
       durationSec: this.durationSec,
       focus: this.focus,
+      persona: this.persona,
       messages: this.messages,
       corrections: this.corrections,
       phraseTips: this.phraseTips,

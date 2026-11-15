@@ -13,6 +13,8 @@ import {
   buildStartInstruction,
   getFocus,
   pickFocus,
+  getPersona,
+  pickPersona,
   rampHint,
   greetingStep,
   LEVEL_SHORT,
@@ -81,7 +83,7 @@ app.post('/api/chat', async (req, res) => {
     const err = validateSessionParams(req.body);
     if (err) return res.status(400).json({ error: err });
 
-    const { language, level, mode, scenario, topic, difficulty, correctionMode, history = [], userMessage, start = false, focus: focusId } = req.body;
+    const { language, level, mode, scenario, topic, difficulty, correctionMode, history = [], userMessage, start = false, focus: focusId, persona: personaId } = req.body;
 
     if (!start && (!userMessage || !userMessage.trim())) {
       return res.status(400).json({ error: 'userMessage gerekli.' });
@@ -100,9 +102,13 @@ app.post('/api/chat', async (req, res) => {
     let focus = getFocus(focusId);
     if (!focus && start) focus = pickFocus(lvl, language);
 
-    console.log(`[chat] ${language} ${lvl} ${mode} ${difficulty} konu=${focus ? focus.id : '-'} tur=${turn}${start ? ' (açılış)' : ''}`);
+    // Konuşma partneri karakteri: açılışta rastgele seçilir, sonra istemci geri gönderir
+    let persona = getPersona(personaId, language);
+    if (!persona && start) persona = pickPersona(language);
 
-    const system = buildSystemPrompt({ language, level: lvl, mode, scenario, topic, difficulty, correctionMode, focus, turn });
+    console.log(`[chat] ${language} ${lvl} ${mode} ${difficulty} kişi=${persona ? persona.name : '-'} konu=${focus ? focus.id : '-'} tur=${turn}${start ? ' (açılış)' : ''}`);
+
+    const system = buildSystemPrompt({ language, level: lvl, mode, scenario, topic, difficulty, correctionMode, focus, turn, persona });
 
     // Geçmişi 30 mesajla sınırla (token ekonomisi).
     // Asistan mesajları JSON biçiminde gönderilir; model aynı biçimi sürdürsün.
@@ -128,7 +134,7 @@ app.post('/api/chat', async (req, res) => {
     // Her turda seviye ve biçim hatırlatması (modelin seviyeden kaymasını önler)
     messages.push({
       role: 'system',
-      content: `Reminder: answer with ONE JSON object only (keys: reply, reply_tr, hint, correction, phrase_tip). Stay strictly at CEFR level ${lvl}: ${LEVEL_SHORT[lvl]}. ${focus ? `Keep steering toward today's focus: ${focus.en}. ` : ''}Do not repeat an earlier question. ${rampHint(turn, lvl)} ${greetingStep(turn, lvl, mode)}`,
+      content: `Reminder: answer with ONE JSON object only (keys: reply, reply_tr, hint, correction, phrase_tip). Stay strictly at CEFR level ${lvl}: ${LEVEL_SHORT[lvl]}. ${focus ? `Keep steering toward today's focus: ${focus.en}. ` : ''}${persona ? `Stay in character as ${persona.name}. ` : ''}Do not repeat an earlier question. ${rampHint(turn, lvl)} ${greetingStep(turn, lvl, mode)}`,
     });
 
     // Açılışta daha yaratıcı (her seferinde farklı) olsun
@@ -142,6 +148,7 @@ app.post('/api/chat', async (req, res) => {
       correction: sanitizeCorrection(parsed.correction),
       phrase_tip: parsed.phrase_tip && parsed.phrase_tip.phrase ? parsed.phrase_tip : null,
       focus: focus ? { id: focus.id, tr: focus.tr, kind: focus.kind } : null,
+      persona: persona ? { id: persona.id, name: persona.name, emoji: persona.emoji, voice: persona.voice, gender: persona.gender } : null,
     });
   } catch (e) {
     console.error('[/api/chat]', e.message);

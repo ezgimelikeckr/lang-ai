@@ -39,13 +39,26 @@ export function getVoicesForLang(langPrefix) {
   return voicesCache.filter((v) => v.lang && v.lang.toLowerCase().startsWith(langPrefix.toLowerCase()));
 }
 
-/** Ayarlardaki tercihe veya kaliteye göre en iyi sesi seçer. */
-export function pickVoice(langPrefix, preferredURI) {
-  const list = getVoicesForLang(langPrefix);
+const GENDER_NAMES = {
+  f: /\b(aria|jenny|sonia|libby|maisie|michelle|ana|denise|eloise|brigitte|julie|elvira|dalia|helena|paloma|sabina|salome|zira|hazel|susan|catherine|linda|samantha|amelie|marie|monica|paulina|lucia)\b/i,
+  m: /\b(guy|ryan|davis|thomas|henri|claude|antoine|alvaro|jorge|pablo|raul|george|mark|david|daniel|diego|miguel|jacques)\b/i,
+};
+
+/**
+ * Ayarlardaki tercihe, karakterin yerel aksanına (locale) ve kaliteye göre
+ * en iyi sesi seçer. Ayarlardan elle seçilmiş ses her zaman önceliklidir.
+ */
+export function pickVoice(langPrefix, preferredURI, locale = null, gender = null) {
+  let list = getVoicesForLang(langPrefix);
   if (!list.length) return null;
   if (preferredURI) {
     const found = list.find((v) => v.voiceURI === preferredURI);
     if (found) return found;
+  }
+  if (locale) {
+    const norm = (l) => String(l || '').toLowerCase().replace('_', '-');
+    const same = list.filter((v) => norm(v.lang) === norm(locale));
+    if (same.length) list = same;
   }
   // Doğal/neural/online sesleri öne al, eski robotik SAPI seslerini geriye at
   const score = (v) =>
@@ -54,8 +67,9 @@ export function pickVoice(langPrefix, preferredURI) {
     (/premium|enhanced/i.test(v.name) ? 3 : 0) +
     (/google/i.test(v.name) ? 3 : 0) +
     (/microsoft/i.test(v.name) ? 1 : 0) +
-    (v.localService ? 0 : 1) -
-    (/\b(david|zira|mark|hazel|george|compact|espeak)\b/i.test(v.name) ? 3 : 0);
+    (v.localService ? 0 : 1) +
+    (gender && GENDER_NAMES[gender] && GENDER_NAMES[gender].test(v.name) ? 4 : 0) -
+    (/\b(david|zira|mark|hazel|george|compact|espeak)\b/i.test(v.name) && !/natural|neural/i.test(v.name) ? 3 : 0);
   return [...list].sort((a, b) => score(b) - score(a))[0];
 }
 
@@ -132,7 +146,7 @@ function speakChunk(text, voice, ttsLang, rate, token) {
  * Cümle cümle okunur, aralarda kısa duraklama ve çok hafif hız farkı vardır;
  * bu, tek parça okumaya göre çok daha az robotik duyulur.
  */
-export async function speak(text, ttsLang, { rate = 1, voiceURI = null } = {}) {
+export async function speak(text, ttsLang, { rate = 1, voiceURI = null, locale = null, gender = null } = {}) {
   const chunks = prepareSpeechChunks(text);
   if (!ttsSupported || !chunks.length) return;
 
@@ -145,7 +159,7 @@ export async function speak(text, ttsLang, { rate = 1, voiceURI = null } = {}) {
     await ensureVoicesReady();
   }
   if (token !== speakToken) return;
-  const voice = pickVoice(ttsLang.split('-')[0], voiceURI);
+  const voice = pickVoice(ttsLang.split('-')[0], voiceURI, locale, gender);
 
   for (let i = 0; i < chunks.length; i++) {
     if (token !== speakToken) return;
@@ -177,7 +191,12 @@ export async function checkMic() {
 
 /**
  * Sürekli dinleme yapan tanıyıcı oluşturur.
- * handlers: { onFinal(text), onInterim(text), onError(err), onEnd() }
+ * handlers: { onFinal(text), onInterim(text), onError(err), onEnd(), getSilenceMs() }
+ *
+ * Duraksayınca cümleyi hemen göndermez: son sözcükten sonra getSilenceMs()
+ * kadar (varsayılan 2,5 sn) sessizlik olursa konuşmayı bitmiş sayar. Böylece
+ * düşünürken verdiğin kısa aralar seni kesmez. rec.flushNow() ile hemen
+ * göndermek de mümkündür ("Bitirdim" düğmesi).
  * onError'a gelen Error nesnesinde `code` alanı tarayıcının hata kodunu taşır.
  */
 export function createRecognizer(sttLang, handlers) {
@@ -190,6 +209,18 @@ export function createRecognizer(sttLang, handlers) {
   rec.maxAlternatives = 1;
 
   let finalBuffer = '';
+  let interimBuffer = '';
+  let silenceTimer = null;
+
+  const flush = () => {
+    clearTimeout(silenceTimer);
+    silenceTimer = null;
+    const text = `${finalBuffer} ${interimBuffer}`.trim();
+    finalBuffer = '';
+    interimBuffer = '';
+    if (text && handlers.onFinal) handlers.onFinal(text);
+  };
+  rec.flushNow = flush;
 
   const fail = (code, message) => {
     const err = new Error(message);
@@ -209,11 +240,17 @@ export function createRecognizer(sttLang, handlers) {
       if (r.isFinal) finalBuffer += r[0].transcript + ' ';
       else interim += r[0].transcript;
     }
-    if (interim && handlers.onInterim) handlers.onInterim(interim);
-    if (finalBuffer.trim() && handlers.onFinal) {
-      const text = finalBuffer.trim();
-      finalBuffer = '';
-      handlers.onFinal(text);
+    interimBuffer = interim;
+
+    // Ekranda o ana kadar söylediğin her şey görünür
+    const sofar = `${finalBuffer} ${interim}`.trim();
+    if (sofar && handlers.onInterim) handlers.onInterim(sofar);
+
+    // Her yeni sözcükte sessizlik sayacı sıfırlanır; süre dolunca gönderilir
+    clearTimeout(silenceTimer);
+    if (sofar) {
+      const wait = handlers.getSilenceMs ? handlers.getSilenceMs() : 2500;
+      silenceTimer = setTimeout(flush, wait);
     }
   };
 
@@ -233,12 +270,8 @@ export function createRecognizer(sttLang, handlers) {
   };
 
   rec.onend = () => {
-    // Bekleyen son metni temizle
-    if (finalBuffer.trim() && handlers.onFinal) {
-      const text = finalBuffer.trim();
-      finalBuffer = '';
-      handlers.onFinal(text);
-    }
+    // Bekleyen son metni gönder
+    flush();
     if (handlers.onEnd) handlers.onEnd();
   };
 

@@ -146,6 +146,29 @@ export function pickFocus(level, language) {
   return pool.length ? pick(pool) : null;
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Konuşma partneri karakterleri: ana dili konuşan, adı ve yaşam öyküsü olan
+// biri gibi konuşur. voice = tercih edilen aksan (tarayıcı sesi için).
+// ─────────────────────────────────────────────────────────────────
+export const PERSONAS = [
+  { id: 'emma', language: 'en', name: 'Emma', gender: 'f', voice: 'en-GB', emoji: '🧁', age: 27, city: 'Manchester, England', bio: 'a graphic designer who loves baking, long walks with her dog Biscuit and a good cup of tea', style: 'relaxed British English ("brilliant", "lovely", "cheers", "I reckon", "to be honest")', fillers: 'well, honestly, you know, mm-hm, oh really?' },
+  { id: 'jake', language: 'en', name: 'Jake', gender: 'm', voice: 'en-US', emoji: '🎸', age: 29, city: 'Austin, Texas, USA', bio: 'a barista who plays guitar in a small band and loves road trips and tacos', style: 'friendly American English ("awesome", "totally", "no worries", "pretty cool")', fillers: 'so, like, honestly, yeah, oh nice' },
+  { id: 'camille', language: 'fr', name: 'Camille', gender: 'f', voice: 'fr-FR', emoji: '📚', age: 26, city: 'Lyon, France', bio: 'works in a bookshop and loves cinema, cooking and Sunday markets', style: 'everyday French from France ("du coup", "carrément", "sympa", "ça marche")', fillers: 'alors, bah, enfin, ouais, tu vois' },
+  { id: 'louis', language: 'fr', name: 'Louis', gender: 'm', voice: 'fr-FR', emoji: '🚴', age: 31, city: 'Bordeaux, France', bio: 'a primary-school teacher who loves cycling, rugby and weekends in the countryside', style: 'warm everyday French from France ("franchement", "pas mal", "chouette", "on y va")', fillers: 'alors, euh, franchement, ben, tu sais' },
+  { id: 'lucia', language: 'es', name: 'Lucía', gender: 'f', voice: 'es-ES', emoji: '☀️', age: 28, city: 'Madrid, España', bio: 'a primary-care nurse who loves dancing, travelling and long dinners with friends', style: 'casual Spanish from Spain ("vale", "genial", "qué guay", "pues nada")', fillers: 'pues, vale, o sea, ¿sabes?, mira' },
+  { id: 'mateo', language: 'es', name: 'Mateo', gender: 'm', voice: 'es-MX', emoji: '🌮', age: 30, city: 'Ciudad de México', bio: 'a software tester who loves street food, football and weekend trips to the mountains', style: 'friendly Mexican Spanish ("qué padre", "ahorita", "claro que sí", "ándale")', fillers: 'pues, este, mira, la verdad, ándale' },
+];
+
+export function getPersona(id, language) {
+  const p = PERSONAS.find((x) => x.id === id);
+  return p && (!language || p.language === language) ? p : null;
+}
+
+export function pickPersona(language) {
+  const pool = PERSONAS.filter((p) => p.language === language);
+  return pool.length ? pick(pool) : null;
+}
+
 /**
  * Kademeli başlangıç: konuşma yavaş yavaş zorlaşır, ama her seviyede farklıdır
  * (A1'de tek kelimelik sorular, C1'de hafif ama doğal ve açık uçlu sorular).
@@ -173,7 +196,7 @@ export function rampHint(turn, level) {
 // A1–A2 seviyesinde günlük/serbest sohbet selamlaşma ile başlar.
 // ─────────────────────────────────────────────────────────────────
 const GREETING_STEPS = [
-  'Step 1 — Greeting: say hello and ask how the learner is (English: "Hello! How are you?").',
+  'Step 1 — Greeting: say hello, introduce yourself with your character name, and ask how the learner is (English: "Hello! I\'m <your name>. How are you?").',
   'Step 2 — Name: react to their answer ("Great!", "Nice!"); if they asked "And you?", say in one short sentence that you are fine too; then ask their name (English: "What\'s your name?").',
   'Step 3 — Origin: say "Nice to meet you, <their name>!" and ask where they are from (English: "Where are you from?").',
   'Step 4 — About them: react briefly (e.g. "Oh, Turkey! Nice."), then ask ONE simple personal question: their age OR whether they are a student or work (English: "How old are you?" or "Are you a student?").',
@@ -192,6 +215,7 @@ export function greetingStep(turn, level, mode) {
 // Ana sohbet promptu
 // ─────────────────────────────────────────────────────────────────
 export function buildSystemPrompt({
+  persona,
   language,
   level,
   mode,
@@ -224,6 +248,18 @@ export function buildSystemPrompt({
     : 'The learner sees corrections only at the end of the session, so they are NOT read aloud and should never interrupt the flow.';
 
   const band = levelBand(level);
+  const personaBlock = persona
+    ? `
+YOUR CHARACTER — you are ${persona.name}, ${persona.age}, from ${persona.city}: ${persona.bio}.
+- Talk like a real native speaker from there in a relaxed everyday register: ${persona.style}.
+${band === 'low'
+    ? '- The learner is a beginner: speak slowly and clearly, keep native colour light (at most "Oh!", "Nice!", "Great!") so nothing confuses them.'
+    : `- Use natural fillers and reactions sparingly (${persona.fillers}) and short backchannels, like a real conversation.`}
+- Now and then share a tiny personal detail or opinion of your own (consistent with your life above), then hand the turn back with ONE question, so it feels like a two-way chat.
+- Do not mention AI, models, teachers, "practice", "the exercise" or "the app" on your own. Stay in character.
+- If the learner SINCERELY asks whether you are a real person or an AI, answer honestly in one short, friendly sentence that you are an AI language partner (${persona.name}), then carry on with the chat. Never claim to be human.
+`
+    : '';
   const scriptStep = greetingStep(turn, level, mode);
   const scriptBlock = scriptStep
     ? `
@@ -251,7 +287,7 @@ ${focus.kind === 'vocab' ? '- Introduce 1-2 useful new words of this theme natur
   return `You are a cheerful LANGUAGE BUDDY in the style of Duolingo — a friendly native speaker (NOT a teacher) helping a Turkish learner practise ${langName} through spoken conversation.
 
 WHO YOU ARE
-- Playful, upbeat and encouraging, with bite-sized turns. Celebrate small wins ("Nice one!", "Great job!", "Perfect!") and keep a light, slightly funny energy. At most ONE emoji per reply, only when it feels natural.
+${personaBlock}- Playful, upbeat and encouraging, with bite-sized turns. Celebrate small wins ("Nice one!", "Great job!", "Perfect!") and keep a light, slightly funny energy. At most ONE emoji per reply, only when it feels natural.
 - React like a real person to what the learner says — never lecture, never give grammar lessons inside "reply".
 - Respond ONLY in ${langName}. Never switch to Turkish. (The only Turkish you ever write is inside the JSON fields marked "_tr".)
 
