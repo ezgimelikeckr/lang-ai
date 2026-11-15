@@ -1,26 +1,37 @@
 // ─────────────────────────────────────────────────────────────────
-// Prompt kalıpları: mod, seviye, zorluk ve düzeltme davranışını
-// yapay zekâya öğreten sistem promptları burada üretilir.
+// Prompt kalıpları: mod, seviye, zorluk, konu odağı ve düzeltme
+// davranışını yapay zekâya öğreten sistem promptları burada üretilir.
 // ─────────────────────────────────────────────────────────────────
 
 export const LANGUAGE_NAMES = { en: 'English', fr: 'French', es: 'Spanish' };
 
+// Ayrıntılı seviye kuralları (ana sohbet promptu için)
 const LEVEL_GUIDE = {
-  A1: 'A1 (beginner): use only present tense and very common concrete words; extremely short sentences.',
-  A2: 'A2 (elementary): simple past and near future are OK; everyday vocabulary; short clear sentences.',
-  B1: 'B1 (intermediate): opinions, simple conditionals, common connectors; everyday plus some abstract vocabulary.',
-  B2: 'B2 (upper-intermediate): nuanced opinions, varied tenses, idiomatic but common expressions.',
-  C1: 'C1 (advanced): natural native-like range, idioms, complex structures.',
-  C2: 'C2 (mastery): full native-like range.',
+  A1: 'A1 (absolute beginner). HARD LIMITS: every sentence max 6 words and the whole reply max 2 short sentences. Present tense only (be, have, can, simple present). Use only the ~300 most common words (family, food, colours, numbers, daily objects). Ask ONLY very easy questions: yes/no, either/or, or one-word answers (e.g. "What colour is your bag?"). Never ask "why", never use idioms, phrasal verbs or the past tense.',
+  A2: 'A2 (elementary). HARD LIMITS: every sentence max 10 words and the whole reply max 2 short sentences. Present tense, simple past and "going to" only. Everyday vocabulary. Ask simple wh-questions (what, where, who, when) about routines, last weekend and plans. Avoid abstract topics and idioms.',
+  B1: 'B1 (intermediate). Sentences up to ~15 words, 2-3 sentences. Past tenses, present perfect, future, first conditional and common connectors (because, but, so). Ask for experiences, reasons and simple opinions ("Why do you like it?", "What happened next?"). Light, common idioms are fine.',
+  B2: 'B2 (upper-intermediate). Sentences up to ~20 words. Varied tenses, second conditional, occasional passive, opinions and comparisons. Ask for explanations, pros and cons and hypothetical questions. Common idioms are fine.',
+  C1: 'C1 (advanced). Natural native pace and range: idioms, phrasal verbs, nuance and abstract topics. Ask probing, open-ended questions and politely challenge ideas.',
+  C2: 'C2 (mastery). Fully natural native-like language: subtle humour, irony, register shifts, rich abstract vocabulary. Ask deep, nuanced questions.',
+};
+
+// Kısa seviye özeti (hatırlatma ve yardım promptu için)
+export const LEVEL_SHORT = {
+  A1: 'sentences of max 6 words, present tense only, the most common words, very easy questions',
+  A2: 'sentences of max 10 words, present/simple past/"going to" only, everyday words, simple wh-questions',
+  B1: 'sentences up to ~15 words, common tenses and connectors, ask for experiences and reasons',
+  B2: 'sentences up to ~20 words, varied tenses, opinions and hypothetical questions',
+  C1: 'natural native-like range, idioms and abstract topics',
+  C2: 'fully native-like range, nuance and subtle register',
 };
 
 const DIFFICULTY_GUIDE = {
   easy:
-    'EASY MODE: Speak slowly and simply — very short sentences (max 8 words), high-frequency vocabulary, prefer present tense. The app reads your reply aloud at a slow speed.',
+    'EASY MODE: Speak slowly and simply — very short sentences, high-frequency vocabulary, prefer the present tense. The app reads your reply aloud at a slow speed.',
   medium:
-    'MEDIUM MODE: Natural but clear pacing — everyday vocabulary, common tenses, normal-length sentences.',
+    'MEDIUM MODE: Natural but clear pacing — everyday vocabulary, common tenses, normal-length sentences (still within the level limits above).',
   hard:
-    'HARD MODE: Natural speed and complexity — idiomatic expressions, varied sentence structures, richer vocabulary. Gently stretch the learner.',
+    'HARD MODE: Natural speed and complexity — idiomatic expressions, varied sentence structures, richer vocabulary. Gently stretch the learner (never beyond one level above theirs).',
 };
 
 const MODES = {
@@ -65,6 +76,77 @@ export const MODE_LABELS = Object.fromEntries(
 );
 
 // ─────────────────────────────────────────────────────────────────
+// Seans konuları (Duolingo tarzı mini ders): her seans bir gramer veya
+// kelime konusu etrafında döner, hatalar bu konulara göre etiketlenir.
+// kind: 'grammar' | 'vocab'   levels: bu konunun uygun olduğu seviyeler
+// ─────────────────────────────────────────────────────────────────
+const LOW = ['A1', 'A2'];
+const MID = ['B1', 'B2'];
+const HIGH = ['C1', 'C2'];
+
+export const FOCUS_TOPICS = [
+  // A1–A2
+  { id: 'present', levels: LOW, kind: 'grammar', tr: 'Geniş zaman', en: 'the simple present tense (habits and routines)' },
+  { id: 'to_be', levels: LOW, kind: 'grammar', tr: 'Be fiili ve kendini tanıtma', en: 'the verb "to be" (English am/is/are, French être, Spanish ser/estar) and introducing yourself' },
+  { id: 'questions', levels: LOW, kind: 'grammar', tr: 'Soru cümleleri', en: 'forming simple questions with question words (what, where, who, when)' },
+  { id: 'negation', levels: LOW, kind: 'grammar', tr: 'Olumsuz cümleler', en: 'making negative sentences' },
+  { id: 'articles', levels: LOW, kind: 'grammar', tr: 'Tanımlıklar (a/the, le/la, el/la)', en: 'articles (English a/an/the; French le/la/un/une; Spanish el/la/un/una)' },
+  { id: 'numbers_time', levels: LOW, kind: 'vocab', theme: 'numbers, telling the time and the days of the week', tr: 'Sayılar, saat ve günler', en: 'numbers, telling the time and days of the week' },
+  { id: 'place_prep', levels: LOW, kind: 'grammar', tr: 'Yer edatları', en: 'prepositions of place (in, on, under, next to)' },
+  { id: 'past_simple', levels: ['A2'], kind: 'grammar', tr: 'Geçmiş zaman', en: 'the simple past tense (what happened yesterday or last weekend)' },
+  { id: 'near_future', levels: ['A2'], kind: 'grammar', tr: 'Yakın gelecek planları', en: 'talking about plans (English going to, French aller + infinitive, Spanish ir a + infinitive)' },
+  { id: 'adjectives', levels: ['A2'], kind: 'grammar', tr: 'Sıfatlar ve basit karşılaştırma', en: 'describing things with adjectives and simple comparisons' },
+  { id: 'vocab_food', levels: LOW, kind: 'vocab', theme: 'food and drinks', tr: 'Yiyecek ve içecek kelimeleri', en: 'food and drink vocabulary' },
+  { id: 'vocab_family', levels: LOW, kind: 'vocab', theme: 'family and friends', tr: 'Aile ve arkadaşlar kelimeleri', en: 'family and friends vocabulary' },
+  { id: 'vocab_home', levels: LOW, kind: 'vocab', theme: 'home and everyday objects', tr: 'Ev ve eşyalar kelimeleri', en: 'home and everyday objects vocabulary' },
+  { id: 'vocab_daily', levels: LOW, kind: 'vocab', theme: 'daily routine', tr: 'Günlük rutin kelimeleri', en: 'daily routine vocabulary' },
+  { id: 'vocab_shopping', levels: LOW, kind: 'vocab', theme: 'shopping, clothes and prices', tr: 'Alışveriş ve fiyat kelimeleri', en: 'shopping, clothes and prices vocabulary' },
+  { id: 'vocab_travel', levels: ['A2'], kind: 'vocab', theme: 'travel and transport', tr: 'Seyahat ve ulaşım kelimeleri', en: 'travel and transport vocabulary' },
+
+  // B1–B2
+  { id: 'past_tenses', levels: MID, kind: 'grammar', tr: 'Geçmiş zaman çeşitleri', en: 'contrasting past tenses (English past simple vs present perfect; French passé composé vs imparfait; Spanish pretérito vs imperfecto)' },
+  { id: 'future_plans', levels: MID, kind: 'grammar', tr: 'Gelecek planlar ve tahminler', en: 'future plans and predictions' },
+  { id: 'conditionals', levels: MID, kind: 'grammar', tr: 'Koşul cümleleri (if…)', en: 'conditional sentences (if … then …)' },
+  { id: 'modals', levels: MID, kind: 'grammar', tr: 'Modal fiiller', en: 'modal verbs (can, should, must, might and their French/Spanish equivalents)' },
+  { id: 'comparatives', levels: MID, kind: 'grammar', tr: 'Karşılaştırma ve üstünlük', en: 'comparatives and superlatives' },
+  { id: 'connectors', levels: MID, kind: 'grammar', tr: 'Bağlaçlar', en: 'connectors (because, although, however, so)' },
+  { id: 'prepositions', levels: MID, kind: 'grammar', tr: 'Edatlar', en: 'prepositions (time, place and verb + preposition)' },
+  { id: 'relative', levels: MID, kind: 'grammar', tr: 'İlgi cümleleri', en: 'relative clauses (English who/which/that; French qui/que; Spanish que/quien)' },
+  { id: 'phrasal', levels: MID, kind: 'grammar', langs: ['en'], tr: 'Phrasal verbs', en: 'phrasal verbs (get up, give up, look for…)' },
+  { id: 'vocab_work', levels: MID, kind: 'vocab', theme: 'work and education', tr: 'İş ve eğitim kelimeleri', en: 'work and education vocabulary' },
+  { id: 'vocab_health', levels: MID, kind: 'vocab', theme: 'health and sport', tr: 'Sağlık ve spor kelimeleri', en: 'health and sport vocabulary' },
+  { id: 'vocab_tech', levels: MID, kind: 'vocab', theme: 'technology and media', tr: 'Teknoloji ve medya kelimeleri', en: 'technology and media vocabulary' },
+  { id: 'vocab_travel_exp', levels: MID, kind: 'vocab', theme: 'travel experiences', tr: 'Seyahat deneyimleri kelimeleri', en: 'travel experience vocabulary' },
+
+  // C1–C2
+  { id: 'hypothetical', levels: HIGH, kind: 'grammar', tr: 'Varsayım ve dilek cümleleri', en: 'hypotheticals and wishes (second/third conditional, wish; the subjunctive in French and Spanish)' },
+  { id: 'passive', levels: HIGH, kind: 'grammar', tr: 'Edilgen yapı', en: 'the passive voice and impersonal constructions' },
+  { id: 'reported', levels: HIGH, kind: 'grammar', tr: 'Dolaylı anlatım', en: 'reported speech' },
+  { id: 'register', levels: HIGH, kind: 'grammar', tr: 'Resmî ve gündelik üslup', en: 'formal versus informal register' },
+  { id: 'idioms', levels: HIGH, kind: 'vocab', theme: 'idioms and fixed expressions', tr: 'Deyimler ve kalıplar', en: 'idioms and fixed expressions' },
+  { id: 'abstract_vocab', levels: HIGH, kind: 'vocab', theme: 'abstract ideas such as society, values and ambition', tr: 'Soyut kavram kelimeleri', en: 'abstract vocabulary (society, values, ethics, ambition)' },
+  { id: 'opinion_phrases', levels: HIGH, kind: 'vocab', theme: 'expressing, softening and challenging opinions', tr: 'Fikir bildirme kalıpları', en: 'phrases for expressing, softening and challenging opinions' },
+  { id: 'nuance', levels: HIGH, kind: 'vocab', theme: 'near-synonyms and shades of meaning', tr: 'Eş anlamlı kelimeler ve ton farkı', en: 'near-synonyms and shades of meaning' },
+];
+
+export function getFocus(id) {
+  return FOCUS_TOPICS.find((f) => f.id === id) || null;
+}
+
+function pick(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+/** Seviyeye ve dile uygun rastgele bir seans konusu seçer. */
+export function pickFocus(level, language) {
+  const lvl = LEVEL_GUIDE[level] ? level : 'A2';
+  const pool = FOCUS_TOPICS.filter(
+    (f) => f.levels.includes(lvl) && (!f.langs || f.langs.includes(language))
+  );
+  return pool.length ? pick(pool) : null;
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Ana sohbet promptu
 // ─────────────────────────────────────────────────────────────────
 export function buildSystemPrompt({
@@ -75,6 +157,7 @@ export function buildSystemPrompt({
   topic,
   difficulty,
   correctionMode,
+  focus,
 }) {
   const langName = LANGUAGE_NAMES[language] || language;
   const levelGuide = LEVEL_GUIDE[level] || LEVEL_GUIDE.A2;
@@ -97,40 +180,51 @@ export function buildSystemPrompt({
     ? 'The learner sees corrections immediately, shown quietly next to their message — they are NOT read aloud.'
     : 'The learner sees corrections only at the end of the session, so they are NOT read aloud and should never interrupt the flow.';
 
-  return `You are a warm, patient CONVERSATION PARTNER — a friendly native speaker, NOT a teacher — helping a Turkish learner practise ${langName} through spoken conversation.
+  const focusBlock = focus
+    ? `
+SESSION FOCUS — today's mini-lesson topic: "${focus.tr}" = ${focus.en} [${focus.kind === 'vocab' ? 'vocabulary' : 'grammar'}]
+- Steer the whole conversation so the learner NATURALLY needs to use this ${focus.kind === 'vocab' ? 'vocabulary' : 'grammar point'}. Ask questions that invite it, and every 2-3 turns give a tiny challenge such as "Can you tell me about …, using …?".
+- Use the target language correctly in your own replies (so the learner hears good examples), but NEVER explain grammar rules inside "reply".
+${focus.kind === 'vocab' ? '- Introduce 1-2 useful new words of this theme naturally, and put them in "phrase_tip".\n' : ''}- Mistakes about this focus are the most important ones to correct.
+`
+    : '';
+
+  return `You are a cheerful LANGUAGE BUDDY in the style of Duolingo — a friendly native speaker (NOT a teacher) helping a Turkish learner practise ${langName} through spoken conversation.
 
 WHO YOU ARE
-- A supportive conversation buddy: relaxed, curious, encouraging. React like a real person ("Nice!", "Oh really?") — never lecture.
-- Respond ONLY in ${langName}. Never switch to Turkish. (The only Turkish you ever write is inside the JSON fields explicitly marked "_tr".)
+- Playful, upbeat and encouraging, with bite-sized turns. Celebrate small wins ("Nice one!", "Great job!", "Perfect!") and keep a light, slightly funny energy. At most ONE emoji per reply, only when it feels natural.
+- React like a real person to what the learner says — never lecture, never give grammar lessons inside "reply".
+- Respond ONLY in ${langName}. Never switch to Turkish. (The only Turkish you ever write is inside the JSON fields marked "_tr".)
 
 HOW YOU SPEAK
-- Keep replies SHORT: 1–3 sentences, max ~40 words. This is a live spoken dialogue, not an essay.
-- ALWAYS end with a question or an invitation so the learner keeps talking.
-- Level: ${levelGuide}
-- ${diffGuide}
-- If the learner struggles, slow down and simplify — but never translate to Turkish.
-- As the conversation goes well, gradually introduce slightly richer words and structures.
+- Keep replies SHORT and spoken-style: contractions, simple rhythm. This is a live dialogue, not an essay.
+- Ask exactly ONE question per turn and ALWAYS end with it, so the learner keeps talking.
 - Vary your questions: never repeat a question or topic you already used in this conversation.
-
+- LEVEL (follow strictly, every single turn): ${levelGuide}
+- ${diffGuide}
+- If the learner struggles or answers very briefly, slow down, simplify and offer a choice ("Do you like tea or coffee?") — but never translate to Turkish in "reply".
+- As the conversation goes well, you may stretch slightly, but never beyond the level limits.
+${focusBlock}
 ${modeInstruction}
 
 ERROR CORRECTION — fill the "correction" JSON field
-- Only flag mistakes that genuinely hurt communication or reveal a pattern worth fixing (wrong tense that changes meaning, seriously wrong word, broken word order).
-- IGNORE: speech-recognition typos, missing articles, small slips, pronunciation issues.
-- At most ONE correction per turn. If the message communicates fine, use null.
-- Priority is communication, not perfection — when in doubt, don't correct.
-- ALWAYS fill "practice_topic_tr" with the short name of the grammar/vocabulary topic the learner should practise to avoid this mistake (in Turkish, with the ${langName} term in parentheses, e.g. "Geçmiş zaman (Past Simple)", "Edatlar (in / on / at)", "Fiil çekimi (Subject–verb agreement)", "Soru cümlesi yapısı").
+- Flag clear grammar or vocabulary mistakes (wrong tense or verb form, wrong word, wrong preposition, wrong word order, missing or wrong article/gender agreement). At most ONE correction per turn — pick the most important one.
+- IGNORE: likely speech-recognition artefacts (punctuation, capitalisation, homophones, odd spelling), pronunciation, and tiny slips that do not matter at this level.
+- If the message is fine, use null.
+- Set "type" to "grammar" or "vocabulary".
+- ALWAYS fill "practice_topic_tr" with a short Turkish topic name the learner should practise, with the ${langName} term in parentheses where helpful (e.g. "Geçmiş zaman (Past Simple)", "Edatlar (in / on / at)", "Fiil çekimi (Subject–verb agreement)", "Yiyecek kelimeleri").
 - NEVER mention or echo the correction inside "reply"; just continue the conversation naturally.
 - ${correctionVisibility}
 
 OUTPUT FORMAT — reply with ONLY one valid JSON object. No markdown, no code fences, no extra text. Even if the learner's message is short or unclear, you MUST answer with this JSON object:
 {
-  "reply": "<your spoken reply in ${langName}, 1-3 short sentences, ending with a question>",
+  "reply": "<your spoken reply in ${langName}, strictly within the level limits, ending with ONE question>",
+  "reply_tr": "<natural Turkish translation of your reply>",
   "correction": null,
   "phrase_tip": null
 }
 When a correction is warranted, "correction" is:
-{ "original": "<the learner's incorrect sentence>", "corrected": "<corrected version in ${langName}>", "explanation_tr": "<1-2 cümle Türkçe açıklama>", "practice_topic_tr": "<çalışılacak konu başlığı, Türkçe>", "alternative": "<daha doğal bir alternatif ifade>" }
+{ "original": "<the learner's incorrect sentence>", "corrected": "<corrected version in ${langName}>", "explanation_tr": "<1-2 cümle Türkçe açıklama>", "type": "grammar", "practice_topic_tr": "<çalışılacak konu başlığı, Türkçe>", "alternative": "<daha doğal bir alternatif ifade>" }
 Occasionally (not every turn), when a genuinely useful expression came up or would clearly help, "phrase_tip" is:
 { "phrase": "<useful expression in ${langName}>", "meaning_tr": "<Türkçe anlamı>" }`;
 }
@@ -151,7 +245,6 @@ const OPENING_TOPICS = {
     'music they listen to',
     'their favourite season and why',
     'a place in their home they like most',
-    'what they ate for breakfast or dinner recently',
     'a sport or game they like',
     'their plans for tomorrow',
   ],
@@ -165,7 +258,6 @@ const OPENING_TOPICS = {
     'exercise and healthy habits',
     'cooking and food culture in their country',
     'a book, podcast or video they liked',
-    'social media habits',
     'a city where they would like to live',
     'a tradition or celebration in their country',
     'a goal they want to reach this year',
@@ -206,10 +298,6 @@ const STORY_GENRES = [
   'a cosy story about a lost key and a stranger',
 ];
 
-function pick(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
 function levelBand(level) {
   if (level === 'B1' || level === 'B2') return 'mid';
   if (level === 'C1' || level === 'C2') return 'high';
@@ -217,7 +305,7 @@ function levelBand(level) {
 }
 
 /** Seansın ilk mesajı için her seferinde farklı bir açılış talimatı üretir. */
-export function buildStartInstruction({ mode, level, topic } = {}) {
+export function buildStartInstruction({ mode, level, topic, focus } = {}) {
   let seed;
   if (mode === 'roleplay') {
     seed = 'Invent one specific, realistic detail for the scene (a name, the time of day, or a small complication) so that every session feels different. Speak first as your character.';
@@ -225,12 +313,17 @@ export function buildStartInstruction({ mode, level, topic } = {}) {
     seed = `Story genre for this session: ${pick(STORY_GENRES)}.`;
   } else if (mode === 'debate' && topic && topic.trim()) {
     seed = `The debate topic is already set. Open with a fresh angle on it using ${pick(OPENING_STYLES)}.`;
+  } else if (focus && focus.kind === 'vocab' && focus.theme) {
+    seed = `Opening theme for this session: ${focus.theme}. Opening style: ${pick(OPENING_STYLES)}.`;
   } else {
-    const topicSeed = pick(OPENING_TOPICS[levelBand(level)]);
-    seed = `Opening topic for this session: ${topicSeed}. Opening style: ${pick(OPENING_STYLES)}.`;
+    seed = `Opening topic for this session: ${pick(OPENING_TOPICS[levelBand(level)])}. Opening style: ${pick(OPENING_STYLES)}.`;
   }
 
-  return `(The conversation is just beginning. Produce the opening turn now. ${seed} This overrides any default opening question in your mode instructions — do NOT simply ask "how are you" or "what have you been up to". Keep it short and at the learner's level. Reply with the JSON object and set "correction": null and "phrase_tip": null.)`;
+  const focusSeed = focus
+    ? ` Today's mini-lesson focus is "${focus.en}": make your opening question invite the learner to use it.`
+    : '';
+
+  return `(The conversation is just beginning. Produce the opening turn now. ${seed}${focusSeed} This overrides any default opening question in your mode instructions — do NOT simply ask "how are you" or "what have you been up to". Stay strictly within the learner's level limits. Reply with the JSON object and set "correction": null and "phrase_tip": null.)`;
 }
 
 // Eski ad uyumluluk için
@@ -241,14 +334,14 @@ export const START_INSTRUCTION = buildStartInstruction({});
 // ─────────────────────────────────────────────────────────────────
 export function buildHelpPrompt({ language, level, intent, context }) {
   const langName = LANGUAGE_NAMES[language] || language;
-  const levelGuide = LEVEL_GUIDE[level] || LEVEL_GUIDE.A2;
+  const levelShort = LEVEL_SHORT[level] || LEVEL_SHORT.A2;
   const ctx = (context || '')
     .split('\n')
     .filter(Boolean)
     .slice(-6)
     .join('\n');
 
-  return `You are a speaking coach helping a Turkish learner of ${langName} (level ${levelGuide}) who is in the middle of a spoken conversation and is stuck — they can't remember how to say something.
+  return `You are a speaking coach helping a Turkish learner of ${langName} (level ${level || 'A2'}: ${levelShort}) who is in the middle of a spoken conversation and is stuck — they can't remember how to say something.
 
 They want to say: "${intent}"
 
@@ -278,6 +371,7 @@ export function buildAnalysisPrompt({
   transcript,
   stats,
   corrections,
+  focus,
 }) {
   const langName = LANGUAGE_NAMES[language] || language;
   const modeLabel = MODE_LABELS[mode] || mode;
@@ -288,8 +382,12 @@ export function buildAnalysisPrompt({
     .slice(-6000);
 
   const correctionText = (corrections || [])
-    .map((c) => `- "${c.original}" → "${c.corrected}" (${c.explanation_tr}${c.practice_topic_tr ? ` | konu: ${c.practice_topic_tr}` : ''})`)
+    .map((c) => `- "${c.original}" → "${c.corrected}" (${c.explanation_tr}${c.practice_topic_tr ? ` | konu: ${c.practice_topic_tr}` : ''}${c.type ? ` | tür: ${c.type}` : ''})`)
     .join('\n');
+
+  const focusLine = focus
+    ? `TODAY'S FOCUS TOPIC: "${focus.tr}" (${focus.en}). In "focus_feedback_tr" say how well the learner handled this topic, based only on the transcript.`
+    : 'There was no fixed focus topic; leave "focus_feedback_tr" as an empty string.';
 
   return `You are a supportive language coach. Analyse this completed spoken practice session of a Turkish learner of ${langName} (self-reported level ${level}, mode: ${modeLabel}).
 
@@ -301,16 +399,19 @@ SESSION STATS: ${stats.durationMin} minutes, ~${stats.userWords} words spoken by
 CORRECTIONS FLAGGED DURING THE SESSION:
 ${correctionText || '(none)'}
 
+${focusLine}
+
 Be encouraging but honest and concrete. All "_tr" fields must be written in Turkish. Do not invent things that are not in the transcript.
 
-"practice_topics": list 1-4 grammar or vocabulary topics the learner should practise next, ordered by importance. Base them on the REAL mistakes in the LEARNER lines (and the flagged corrections above), grouping repeated mistakes under one topic. For each topic give the Turkish topic name (with the ${langName} term in parentheses), why it matters in this learner's speech, ONE example taken from the transcript (wrong → right), and a short concrete exercise they can do. If the learner made almost no mistakes, give 1-2 topics that would stretch them at their level and say so in "why_tr".
+"practice_topics": list 1-4 grammar or vocabulary topics the learner should practise next, ordered by importance. Base them on the REAL mistakes in the LEARNER lines (and the flagged corrections above), grouping repeated mistakes under one topic. For each topic give the Turkish topic name (with the ${langName} term in parentheses), "kind" ("grammar" or "vocabulary"), why it matters in this learner's speech, ONE example taken from the transcript (wrong → right), and a short concrete exercise they can do. If the learner made almost no mistakes, give 1-2 topics that would stretch them at their level and say so in "why_tr".
 
 Reply ONLY with valid JSON, no extra text:
 {
   "summary_tr": "<2-4 cümlelik genel değerlendirme: akıcılık, kelime kullanımı, katılım>",
+  "focus_feedback_tr": "<seans konusunda nasıl performans gösterdiği, 1-2 cümle>",
   "strengths_tr": ["<2-4 güçlü yön>"],
   "improvements_tr": ["<2-4 somut, uygulanabilir geliştirme önerisi>"],
-  "practice_topics": [ { "topic_tr": "<konu adı>", "why_tr": "<neden önemli, konuşmadaki hataya dayanarak>", "example": { "wrong": "<seanstan yanlış cümle>", "right": "<doğrusu>" }, "exercise_tr": "<kısa, somut pratik önerisi>" } ],
+  "practice_topics": [ { "topic_tr": "<konu adı>", "kind": "grammar", "why_tr": "<neden önemli, konuşmadaki hataya dayanarak>", "example": { "wrong": "<seanstan yanlış cümle>", "right": "<doğrusu>" }, "exercise_tr": "<kısa, somut pratik önerisi>" } ],
   "new_phrases": [ { "phrase": "<seansta geçen veya öğrenilmesi değerli bir ifade>", "meaning_tr": "<Türkçe anlamı>" } ]
 }`;
 }

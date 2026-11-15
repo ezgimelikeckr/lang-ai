@@ -11,6 +11,9 @@ import {
   buildHelpPrompt,
   buildAnalysisPrompt,
   buildStartInstruction,
+  getFocus,
+  pickFocus,
+  LEVEL_SHORT,
   MODE_LABELS,
   SCENARIOS,
 } from './prompts.js';
@@ -49,6 +52,22 @@ function parseChatReply(raw) {
   }
 }
 
+function str(v) {
+  return typeof v === 'string' ? v : '';
+}
+
+function sanitizeCorrection(c) {
+  if (!c || !c.corrected) return null;
+  return {
+    original: str(c.original),
+    corrected: str(c.corrected),
+    explanation_tr: str(c.explanation_tr),
+    type: c.type === 'vocabulary' ? 'vocabulary' : 'grammar',
+    practice_topic_tr: str(c.practice_topic_tr),
+    alternative: str(c.alternative),
+  };
+}
+
 // ── Durum kontrolü ───────────────────────────────────────────────
 app.get('/api/status', (_req, res) => {
   res.json(modelInfo());
@@ -60,7 +79,7 @@ app.post('/api/chat', async (req, res) => {
     const err = validateSessionParams(req.body);
     if (err) return res.status(400).json({ error: err });
 
-    const { language, level, mode, scenario, topic, difficulty, correctionMode, history = [], userMessage, start = false } = req.body;
+    const { language, level, mode, scenario, topic, difficulty, correctionMode, history = [], userMessage, start = false, focus: focusId } = req.body;
 
     if (!start && (!userMessage || !userMessage.trim())) {
       return res.status(400).json({ error: 'userMessage gerekli.' });
@@ -69,29 +88,53 @@ app.post('/api/chat', async (req, res) => {
       return res.status(400).json({ error: 'Geçersiz rol yapma senaryosu.' });
     }
 
-    const system = buildSystemPrompt({ language, level, mode, scenario, topic, difficulty, correctionMode });
+    const lvl = LEVELS.includes(level) ? level : 'A2';
 
-    // Geçmişi 30 mesajla sınırla (token ekonomisi)
+    // Seans konusu: istemci gönderdiyse onu kullan, açılışta rastgele seç
+    let focus = getFocus(focusId);
+    if (!focus && start) focus = pickFocus(lvl, language);
+
+    console.log(`[chat] ${language} ${lvl} ${mode} ${difficulty} konu=${focus ? focus.id : '-'}${start ? ' (açılış)' : ''}`);
+
+    const system = buildSystemPrompt({ language, level: lvl, mode, scenario, topic, difficulty, correctionMode, focus });
+
+    // Geçmişi 30 mesajla sınırla (token ekonomisi).
+    // Asistan mesajları JSON biçiminde gönderilir; model aynı biçimi sürdürsün.
     const trimmed = (Array.isArray(history) ? history : [])
       .filter((m) => m && typeof m.content === 'string' && (m.role === 'user' || m.role === 'assistant'))
       .slice(-30)
-      .map((m) => ({ role: m.role, content: m.content }));
+      .map((m) =>
+        m.role === 'assistant'
+          ? {
+              role: 'assistant',
+              content: JSON.stringify({ reply: m.content, reply_tr: str(m.tr), correction: null, phrase_tip: null }),
+            }
+          : { role: 'user', content: m.content }
+      );
 
     const messages = [{ role: 'system', content: system }, ...trimmed];
     if (start) {
-      messages.push({ role: 'user', content: buildStartInstruction({ mode, level, topic }) });
+      messages.push({ role: 'user', content: buildStartInstruction({ mode, level: lvl, topic, focus }) });
     } else {
       messages.push({ role: 'user', content: userMessage.trim() });
     }
+
+    // Her turda seviye ve biçim hatırlatması (modelin seviyeden kaymasını önler)
+    messages.push({
+      role: 'system',
+      content: `Reminder: answer with ONE JSON object only (keys: reply, reply_tr, correction, phrase_tip). Stay strictly at CEFR level ${lvl}: ${LEVEL_SHORT[lvl]}. ${focus ? `Keep steering toward today's focus: ${focus.en}. ` : ''}Do not repeat an earlier question.`,
+    });
 
     // Açılışta daha yaratıcı (her seferinde farklı) olsun
     const raw = await chat(messages, { temperature: start ? 1.0 : 0.7 });
     const parsed = parseChatReply(raw);
 
     res.json({
-      reply: typeof parsed.reply === 'string' ? parsed.reply : '',
-      correction: parsed.correction && parsed.correction.corrected ? parsed.correction : null,
+      reply: str(parsed.reply),
+      reply_tr: str(parsed.reply_tr),
+      correction: sanitizeCorrection(parsed.correction),
       phrase_tip: parsed.phrase_tip && parsed.phrase_tip.phrase ? parsed.phrase_tip : null,
+      focus: focus ? { id: focus.id, tr: focus.tr, kind: focus.kind } : null,
     });
   } catch (e) {
     console.error('[/api/chat]', e.message);
@@ -126,10 +169,11 @@ app.post('/api/help', async (req, res) => {
 // ── Seans analizi ────────────────────────────────────────────────
 app.post('/api/analyze', async (req, res) => {
   try {
-    const { language, level, mode, transcript, stats, corrections } = req.body;
+    const { language, level, mode, transcript, stats, corrections, focus: focusId } = req.body;
     if (!LANGUAGES.includes(language)) return res.status(400).json({ error: 'Geçersiz dil.' });
 
     const system = buildAnalysisPrompt({
+      focus: getFocus(focusId),
       language,
       level: LEVELS.includes(level) ? level : 'A2',
       mode: MODE_LABELS[mode] ? mode : 'free',
@@ -147,6 +191,7 @@ app.post('/api/analyze', async (req, res) => {
           .slice(0, 5)
           .map((t) => ({
             topic_tr: String(t.topic_tr),
+            kind: t.kind === 'vocabulary' ? 'vocabulary' : 'grammar',
             why_tr: String(t.why_tr || ''),
             example: t.example && t.example.wrong
               ? { wrong: String(t.example.wrong), right: String(t.example.right || '') }
@@ -157,6 +202,7 @@ app.post('/api/analyze', async (req, res) => {
 
     res.json({
       summary_tr: parsed.summary_tr || '',
+      focus_feedback_tr: str(parsed.focus_feedback_tr),
       strengths_tr: Array.isArray(parsed.strengths_tr) ? parsed.strengths_tr : [],
       improvements_tr: Array.isArray(parsed.improvements_tr) ? parsed.improvements_tr : [],
       practice_topics: practiceTopics,

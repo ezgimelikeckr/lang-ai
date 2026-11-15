@@ -7,7 +7,7 @@ import { api } from './api.js';
 import { LANGUAGES } from './storage.js';
 import { sttSupported, ttsSupported, createRecognizer, speak, stopSpeaking } from './speech.js';
 
-const RATES = { easy: 0.82, medium: 0.95, hard: 1.06 };
+const RATES = { easy: 0.9, medium: 1.0, hard: 1.06 };
 
 // Bu hatalardan sonra otomatik yeniden denemenin anlamı yok → duraklat, kullanıcı karar versin
 const FATAL_MIC_ERRORS = new Set([
@@ -36,6 +36,7 @@ export class Session {
     this.quickEnds = 0;      // art arda "hemen kapanan" dinleme sayısı
     this.rec = null;
     this.timer = null;
+    this.focus = null;       // {id, tr, kind} — seansın mini ders konusu
   }
 
   get langInfo() {
@@ -57,9 +58,19 @@ export class Session {
     this.startTimer();
     this.setState('thinking');
     try {
-      const res = await api.chat({ ...this.opts, language: this.opts.lang, history: [], start: true });
+      const res = await api.chat({
+        ...this.opts,
+        language: this.opts.lang,
+        focus: this.opts.focusId,
+        history: [],
+        start: true,
+      });
       if (this.ended) return;
-      this.pushAssistant(res.reply);
+      if (res.focus) {
+        this.focus = res.focus;
+        this.cb.onFocus?.(this.focus);
+      }
+      this.pushAssistant(res.reply, null, res.reply_tr);
       if (this.state === 'paused') return;
       await this.speakReply(res.reply);
       this.startMic();
@@ -214,9 +225,15 @@ export class Session {
       const history = this.messages
         .slice(0, -1)
         .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .map((m) => ({ role: m.role, content: m.text }));
+        .map((m) => ({ role: m.role, content: m.text, tr: m.tr }));
 
-      const res = await api.chat({ ...this.opts, language: this.opts.lang, history, userMessage: text });
+      const res = await api.chat({
+        ...this.opts,
+        language: this.opts.lang,
+        focus: this.focus ? this.focus.id : undefined,
+        history,
+        userMessage: text,
+      });
 
       if (this.ended) return;
 
@@ -227,7 +244,7 @@ export class Session {
       if (res.phrase_tip) {
         this.phraseTips.push(res.phrase_tip);
       }
-      this.pushAssistant(res.reply, res.phrase_tip);
+      this.pushAssistant(res.reply, res.phrase_tip, res.reply_tr);
       // Duraklatma sırasında seslendirme yapma; cevap ekranda görünür,
       // devam edildiğinde kullanıcı söz hakkına sahip olur.
       if (this.state === 'paused') return;
@@ -247,9 +264,9 @@ export class Session {
     this.sendUserMessage(phrase);
   }
 
-  pushAssistant(text, phraseTip = null) {
+  pushAssistant(text, phraseTip = null, tr = '') {
     if (!text) return;
-    this.messages.push({ role: 'assistant', text, phraseTip });
+    this.messages.push({ role: 'assistant', text, tr, phraseTip });
     this.cb.onMessagesChanged?.();
   }
 
@@ -283,6 +300,7 @@ export class Session {
       difficulty: this.opts.difficulty,
       correctionMode: this.opts.correctionMode,
       durationSec: this.durationSec,
+      focus: this.focus,
       messages: this.messages,
       corrections: this.corrections,
       phraseTips: this.phraseTips,
@@ -298,6 +316,7 @@ export class Session {
       language: this.opts.lang,
       level: this.opts.level,
       mode: this.opts.mode,
+      focus: this.focus ? this.focus.id : null,
       transcript: this.messages.map((m) => ({ role: m.role, text: m.text })),
       stats: {
         durationMin: Math.round(this.durationSec / 60 * 10) / 10,

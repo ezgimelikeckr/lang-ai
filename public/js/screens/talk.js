@@ -39,7 +39,7 @@ export function render(root, params) {
           <span class="emoji">${info.flag}</span>
           <div>
             <div class="title">${modeInfo.label}${config.mode === 'roleplay' ? ` · ${SCENARIOS[config.scenario]?.label || ''}` : ''}${config.mode === 'debate' && config.topic ? ` · ${escapeHtml(config.topic)}` : ''}</div>
-            <div class="sub">${info.name} · Seviye ${config.level}</div>
+            <div class="sub">${info.name} · Seviye ${config.level}<span id="focus-label"></span></div>
           </div>
         </div>
         <div class="row">
@@ -79,6 +79,7 @@ export function render(root, params) {
   // ── Seans motoru ───────────────────────────────────────────────
   const session = new Session(config, {
     onStateChange: (state) => updateUi(),
+    onFocus: (f) => { $('focus-label').textContent = f ? ` · 🎯 ${f.tr}` : ''; },
     onMessagesChanged: () => renderTranscript(),
     onInterim: (text) => { $('interim').textContent = text; },
     onTick: (sec) => { $('timer').textContent = fmtClock(sec); },
@@ -104,7 +105,10 @@ export function render(root, params) {
           transcript.appendChild(renderCorrection(m.correction));
         }
       } else {
-        transcript.appendChild(el(`<div class="msg"><div class="who">${info.name} Partneri</div><div class="bubble">${escapeHtml(m.text)}</div></div>`));
+        const trLine = m.tr
+          ? `<div style="margin-top:7px;padding-top:7px;border-top:1px dashed var(--border);font-size:.84rem;opacity:.75">🇹🇷 ${escapeHtml(m.tr)}</div>`
+          : '';
+        transcript.appendChild(el(`<div class="msg"><div class="who">${info.name} Partneri</div><div class="bubble">${escapeHtml(m.text)}${trLine}</div></div>`));
         if (m.phraseTip) {
           const pill = el(`
             <div class="phrase-tip">💡 <b>${escapeHtml(m.phraseTip.phrase)}</b> — ${escapeHtml(m.phraseTip.meaning_tr)}
@@ -125,6 +129,7 @@ export function render(root, params) {
         <div class="row"><span class="tag">✎ Sen:</span><span class="wrong">${escapeHtml(c.original)}</span></div>
         <div class="row"><span class="tag">✓ Doğrusu:</span><span class="right">${escapeHtml(c.corrected)}</span></div>
         ${c.explanation_tr ? `<div class="row"><span class="tag">ℹ</span><span class="explain">${escapeHtml(c.explanation_tr)}</span></div>` : ''}
+        ${c.practice_topic_tr ? `<div class="row"><span class="tag">📚 Çalış:</span><span class="explain"><b>${escapeHtml(c.practice_topic_tr)}</b>${c.type ? ` · ${c.type === 'vocabulary' ? 'kelime' : 'gramer'}` : ''}</span></div>` : ''}
         ${c.alternative ? `<div class="row"><span class="tag">→ Daha doğalı:</span><span class="alt">${escapeHtml(c.alternative)}</span></div>` : ''}
       </div>`);
     const listen = el(`<div class="row" style="margin-top:6px"><button class="btn ghost small">🔊 Doğrusunu dinle</button></div>`);
@@ -205,7 +210,7 @@ export function render(root, params) {
       closeModal();
       updateUi();
       // 'thinking' durumunda cevap gelince akış kendisi mikrofonu açar;
-      // dinleme veya yarında kalan konuşma durumunda hemen aç.
+      // dinleme veya yarıda kalan konuşma durumunda hemen aç.
       if (!session.ended && (session.state === 'listening' || session.state === 'speaking')) {
         session.startMic();
       }

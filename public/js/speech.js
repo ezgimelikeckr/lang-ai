@@ -47,31 +47,56 @@ export function pickVoice(langPrefix, preferredURI) {
     const found = list.find((v) => v.voiceURI === preferredURI);
     if (found) return found;
   }
-  // Doğal/online sesleri tercih et
+  // Doğal/neural/online sesleri öne al, eski robotik SAPI seslerini geriye at
   const score = (v) =>
-    (/natural/i.test(v.name) ? 4 : 0) + (/google/i.test(v.name) ? 3 : 0) +
-    (/microsoft/i.test(v.name) ? 2 : 0) + (v.localService ? 0 : 1);
+    (/natural|neural/i.test(v.name) ? 6 : 0) +
+    (/online/i.test(v.name) ? 2 : 0) +
+    (/premium|enhanced/i.test(v.name) ? 3 : 0) +
+    (/google/i.test(v.name) ? 3 : 0) +
+    (/microsoft/i.test(v.name) ? 1 : 0) +
+    (v.localService ? 0 : 1) -
+    (/\b(david|zira|mark|hazel|george|compact|espeak)\b/i.test(v.name) ? 3 : 0);
   return [...list].sort((a, b) => score(b) - score(a))[0];
 }
 
-/**
- * Metni hedef dilde seslendirir; Promise okuma bitince çözülür.
- * NOT: Chrome'da speechSynthesis bazen takılır ve onend hiç tetiklenmez.
- * Bu yüzden bir "bekçi" zamanlayıcı var: süre dolarsa yine de devam edilir,
- * böylece mikrofon hiçbir zaman sonsuza kadar kapalı kalmaz.
- */
-export function speak(text, ttsLang, { rate = 1, voiceURI = null } = {}) {
-  return new Promise((resolve) => {
-    if (!ttsSupported || !text) return resolve();
-    const synth = window.speechSynthesis;
-    synth.cancel();
+// ── Konuşma metnini doğal sese hazırlama ─────────────────────────
+const EMOJI_RE = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}]/gu;
 
+/** Emoji ve biçim işaretlerini temizler (seslendirme onları okumasın). */
+function cleanForSpeech(text) {
+  return String(text || '')
+    .replace(EMOJI_RE, '')
+    .replace(/[*_`#~]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Metni cümlelere böler; çok kısa parçaları sonrakiyle birleştirir. */
+export function prepareSpeechChunks(text) {
+  const clean = cleanForSpeech(text);
+  if (!clean) return [];
+  const parts = (clean.match(/[^.!?…]+[.!?…]*/g) || [clean]).map((p) => p.trim()).filter(Boolean);
+  const chunks = [];
+  for (const p of parts) {
+    const last = chunks.length - 1;
+    if (last >= 0 && chunks[last].length < 14) chunks[last] += ' ' + p;
+    else chunks.push(p);
+  }
+  return chunks;
+}
+
+let speakToken = 0;      // yeni konuşma veya durdurma gelince eskisini iptal eder
+let voicesWaited = false;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function speakChunk(text, voice, ttsLang, rate, token) {
+  return new Promise((resolve) => {
+    const synth = window.speechSynthesis;
     const u = new SpeechSynthesisUtterance(text);
-    const prefix = ttsLang.split('-')[0];
-    const voice = pickVoice(prefix, voiceURI);
     if (voice) u.voice = voice;
     u.lang = voice ? voice.lang : ttsLang;
     u.rate = rate;
+    u.pitch = 1;
 
     let done = false;
     let watchdog = null;
@@ -82,8 +107,8 @@ export function speak(text, ttsLang, { rate = 1, voiceURI = null } = {}) {
       resolve();
     };
 
-    // Tahmini okuma süresi + pay (≈ karakter başına 90 ms)
-    const maxMs = Math.max(4000, (text.length * 90) / rate + 3000);
+    // Chrome'da onend bazen hiç gelmez: tahmini süre dolunca devam et
+    const maxMs = Math.max(3000, (text.length * 90) / rate + 2500);
     watchdog = setTimeout(() => {
       console.warn('[TTS] onend gelmedi, zaman aşımıyla devam ediliyor');
       synth.cancel();
@@ -95,12 +120,44 @@ export function speak(text, ttsLang, { rate = 1, voiceURI = null } = {}) {
 
     // cancel() ile speak() arasına kısa boşluk: Chrome'daki takılmayı azaltır
     setTimeout(() => {
-      if (!done) synth.speak(u);
+      if (done) return;
+      if (token !== speakToken) return finish();
+      synth.speak(u);
     }, 50);
   });
 }
 
+/**
+ * Metni hedef dilde seslendirir; Promise okuma bitince çözülür.
+ * Cümle cümle okunur, aralarda kısa duraklama ve çok hafif hız farkı vardır;
+ * bu, tek parça okumaya göre çok daha az robotik duyulur.
+ */
+export async function speak(text, ttsLang, { rate = 1, voiceURI = null } = {}) {
+  const chunks = prepareSpeechChunks(text);
+  if (!ttsSupported || !chunks.length) return;
+
+  const synth = window.speechSynthesis;
+  const token = ++speakToken;
+  synth.cancel();
+
+  if (!voicesCache.length && !voicesWaited) {
+    voicesWaited = true;
+    await ensureVoicesReady();
+  }
+  if (token !== speakToken) return;
+  const voice = pickVoice(ttsLang.split('-')[0], voiceURI);
+
+  for (let i = 0; i < chunks.length; i++) {
+    if (token !== speakToken) return;
+    const r = Math.min(1.3, Math.max(0.6, rate + (Math.random() * 0.06 - 0.03)));
+    await speakChunk(chunks[i], voice, ttsLang, r, token);
+    if (token !== speakToken) return;
+    if (i < chunks.length - 1) await sleep(150);
+  }
+}
+
 export function stopSpeaking() {
+  speakToken++;
   if (ttsSupported) window.speechSynthesis.cancel();
 }
 
