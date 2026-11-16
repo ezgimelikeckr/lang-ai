@@ -1,328 +1,214 @@
-// ─────────────────────────────────────────────────────────────────
-// Konuşma ekranı: transkript, büyük mikrofon butonu, süre,
-// duraklat/devam, yardım butonu.
-// ─────────────────────────────────────────────────────────────────
-import { el, icon, escapeHtml, toast, modal, closeModal } from '../ui.js';
-import { navigate } from '../router.js';
-import { Session } from '../conversation.js';
+// Arkadaşınla sohbet: bir sahne, 5 tur, mikrofona dokunarak konuş
+import { el, icon, escapeHtml, toast, hillsSvg, openSheet } from '../ui.js';
+import { navigate, onCleanup } from '../router.js';
 import { api } from '../api.js';
-import { speak, stopSpeaking } from '../speech.js';
-import { LANGUAGES, MODES, SCENARIOS } from '../storage.js';
-
-const STATUS_LABELS = {
-  listening: 'Dinliyorum…',
-  thinking: 'Düşünüyor…',
-  speaking: 'Konuşuyor…',
-  paused: 'Duraklatıldı',
-  help: 'Yardım alıyorsun',
-};
-
-function fmtClock(sec) {
-  const m = Math.floor(sec / 60).toString().padStart(2, '0');
-  const s = (sec % 60).toString().padStart(2, '0');
-  return `${m}:${s}`;
-}
+import { Session } from '../conversation.js';
+import { stopSpeaking } from '../speech.js';
+import { LANGUAGES, FRIENDS, sceneFor, difficultyFor, levelBand, MAX_TURNS } from '../data.js';
+import { getProfile, addPoints, addSession } from '../storage.js';
 
 export function render(root, params) {
-  const config = params.config;
-  const info = LANGUAGES[config.lang];
-  const modeInfo = MODES[config.mode];
-
-  let customStatus = null;
-  let helpOpen = false;
-  const openHints = new Set(); // açılmış ipuçları
+  const profile = getProfile();
+  const lang = profile.active;
+  const level = profile.levels[lang] || 'A2';
+  const friend = FRIENDS[params.friend] || FRIENDS.mia;
+  const info = LANGUAGES[lang];
+  const scene = sceneFor(friend, level);
+  let slow = levelBand(level) === 'low';
+  let finished = false;
+  let sheetRef = null;
 
   const screen = el(`
-    <div class="screen talk-layout">
-      <div class="talk-top">
-        <div class="info">
-          <button class="back-btn" id="exit-btn" title="Seansı bitir">${icon('back')}</button>
-          <span class="emoji">${info.flag}</span>
-          <div>
-            <div class="title">${modeInfo.label}${config.mode === 'roleplay' ? ` · ${SCENARIOS[config.scenario]?.label || ''}` : ''}${config.mode === 'debate' && config.topic ? ` · ${escapeHtml(config.topic)}` : ''}</div>
-            <div class="sub">${info.name} · Seviye ${config.level}<span id="focus-label"></span></div>
-          </div>
-        </div>
-        <div class="row">
-          <select id="diff-select" title="Zorluk" style="padding:8px 12px;border-radius:10px;border:1.5px solid var(--border);background:var(--surface);font-size:.84rem">
-            <option value="easy" ${config.difficulty === 'easy' ? 'selected' : ''}>🟢 Kolay</option>
-            <option value="medium" ${config.difficulty === 'medium' ? 'selected' : ''}>🔵 Orta</option>
-            <option value="hard" ${config.difficulty === 'hard' ? 'selected' : ''}>🔴 Zor</option>
-          </select>
-          <div class="timer" id="timer">00:00</div>
-        </div>
+    <div class="screen no-tabs">
+      <div class="topbar">
+        <button class="back-btn" id="back" aria-label="Geri">${icon('back')}</button>
+        <div class="title">${friend.name} ile sohbet</div>
+        <span class="badge-level">${level}</span>
       </div>
-
-      <div class="transcript" id="transcript"></div>
-
-      <div class="talk-controls">
-        <div class="status-pill" id="status-pill"><span class="dot"></span><span id="status-label">Hazırlanıyor…</span></div>
-        <div class="interim-text" id="interim"></div>
-        <button class="btn ghost small" id="done-btn" style="display:none;margin:0 auto 8px">✓ Bitirdim, gönder</button>
-        <div class="mic-row">
-          <button class="ctrl-btn help" id="help-btn" title="Konuşma yardımı — ne söyleyeceğini hatırlamıyorsan">${icon('help')}</button>
-          <button class="mic-btn" id="mic-btn" title="Duraklat / devam et">
-            <span class="mic-icon">${icon('mic')}</span>
-            <span class="eq"><span></span><span></span><span></span><span></span></span>
-          </button>
-          <button class="ctrl-btn end" id="end-btn" title="Seansı bitir">${icon('stop')}</button>
-        </div>
+      <div class="meter"><b>${scene.label} · ${info.name}</b><span id="turnlabel"></span></div>
+      <div class="pbar"><i id="pfill" style="width:0%"></i></div>
+      <div class="scene chat">
+        ${hillsSvg()}
+        <span class="tagpill">Sanal arkadaşın</span>
+        <div class="who"><img src="${friend.img}" alt="" height="150" /></div>
       </div>
+      <div class="msg-card" id="msg"></div>
+      <button class="hint-card" id="hint" style="display:none"></button>
+      <div class="mic-zone">
+        <h3>Şimdi sıra sende</h3>
+        <div class="mic-wrap">
+          <div class="side-wave" id="wl"><i></i><i></i><i></i><i></i></div>
+          <div class="mic-halo" id="halo"><button class="mic-btn" id="mic" aria-label="Mikrofon">${icon('mic', 38, 1.8)}</button></div>
+          <div class="side-wave" id="wr"><i></i><i></i><i></i><i></i></div>
+        </div>
+        <div class="live-text" id="live"></div>
+        <p class="mic-help" id="help"></p>
+      </div>
+      <button class="end-link" id="end">Sohbeti bitir</button>
+      <p class="encourage">Mükemmel değil, kendin gibi konuş.</p>
     </div>`);
-
   root.appendChild(screen);
-
   const $ = (id) => screen.querySelector('#' + id);
-  const transcript = $('transcript');
-  const micBtn = $('mic-btn');
-  const statusPill = $('status-pill');
-  const statusLabel = $('status-label');
 
-  // ── Seans motoru ───────────────────────────────────────────────
-  const session = new Session(config, {
-    onStateChange: (state) => updateUi(),
-    onFocus: (f) => { $('focus-label').textContent = f ? ` · 🎯 ${f.tr}` : ''; },
-    onMessagesChanged: () => renderTranscript(),
-    onInterim: (text) => {
-      $('interim').textContent = text;
-      $('done-btn').style.display = text ? '' : 'none';
-    },
-    onTick: (sec) => { $('timer').textContent = fmtClock(sec); },
-    onError: (msg) => toast(msg, 'error', 6000),
-    onEnded: (sessionObj) => {
-      if (sessionObj.userMessages === 0) {
-        toast('Konuşma olmadığı için seans kaydedilmedi.');
-        navigate('home');
-      } else {
-        navigate('analysis', { session: sessionObj, live: true });
-      }
-    },
+  const session = new Session({
+    lang,
+    level,
+    mode: scene.mode,
+    scenario: scene.scenario,
+    topic: '',
+    difficulty: difficultyFor(level),
+    correctionMode: 'end',
+    personaId: friend.id,
+    learnerName: profile.name,
+    autoListen: false,
+    maxTurns: MAX_TURNS,
+  }, {
+    onStateChange: () => { renderMsg(); updateUi(); },
+    onMessagesChanged: () => { renderMsg(); updateMeter(); },
+    onInterim: (t) => { $('live').textContent = t; },
+    onError: (m) => toast(m, 'error', 6000),
+    onLimitReached: () => openSummary(),
+    onEnded: () => openSummary(),
+  });
+  session.rateOverride = slow ? 0.8 : null;
+
+  onCleanup(() => {
+    finished = true;
+    session.dispose();
+    if (sheetRef) sheetRef.close();
   });
 
-  // ── Transkript ─────────────────────────────────────────────────
-  function renderTranscript() {
-    transcript.innerHTML = '';
-    session.messages.forEach((m) => {
-      if (m.role === 'user') {
-        transcript.appendChild(el(`<div class="msg user"><div class="who">Sen</div><div class="bubble">${escapeHtml(m.text)}</div></div>`));
-        // Anlık düzeltme kartı (yalnız anlık modda; seans sonu modunda sonda gösterilir)
-        if (m.correction && config.correctionMode === 'instant') {
-          transcript.appendChild(renderCorrection(m.correction));
-        }
-      } else {
-        const trLine = m.tr
-          ? `<div style="margin-top:7px;padding-top:7px;border-top:1px dashed var(--border);font-size:.84rem;opacity:.75">🇹🇷 ${escapeHtml(m.tr)}</div>`
-          : '';
-        transcript.appendChild(el(`<div class="msg"><div class="who">${session.persona ? `${session.persona.emoji} ${escapeHtml(session.persona.name)}` : `${info.name} Partneri`}</div><div class="bubble">${escapeHtml(m.text)}${trLine}</div></div>`));
-        if (m.phraseTip) {
-          const pill = el(`
-            <div class="phrase-tip">💡 <b>${escapeHtml(m.phraseTip.phrase)}</b> — ${escapeHtml(m.phraseTip.meaning_tr)}
-              <button title="Dinle">${icon('speaker')}</button></div>`);
-          pill.querySelector('button').addEventListener('click', () =>
-            session.speakSample(m.phraseTip.phrase, info.ttsLang, { rate: 0.9, voiceURI: config.voiceURI })
-          );
-          transcript.appendChild(pill);
-        }
-        // İpucu: yalnızca sıra sendeyken (son mesaj partnerin) gösterilir
-        if (m.hint && m === session.messages[session.messages.length - 1]) {
-          const hintBox = el('<div style="margin:6px 0 2px"></div>');
-          const drawHint = () => {
-            if (openHints.has(m)) {
-              hintBox.innerHTML = `<div class="phrase-tip">💡 <b>${escapeHtml(m.hint.phrase)}</b>${m.hint.meaning_tr ? ` — ${escapeHtml(m.hint.meaning_tr)}` : ''} <button title="Dinle">${icon('speaker')}</button></div>`;
-              hintBox.querySelector('button').addEventListener('click', () =>
-                session.speakSample(m.hint.phrase, info.ttsLang, { rate: 0.9, voiceURI: config.voiceURI })
-              );
-            } else {
-              hintBox.innerHTML = '<button class="btn ghost small">💡 Ne diyeceğimi bilmiyorum — ipucu</button>';
-              hintBox.querySelector('button').addEventListener('click', () => {
-                openHints.add(m);
-                drawHint();
-              });
-            }
-          };
-          drawHint();
-          transcript.appendChild(hintBox);
-        }
-      }
+  // ── Çizim ──────────────────────────────────────────────────────
+  function lastAssistant() {
+    return [...session.messages].reverse().find((m) => m.role === 'assistant');
+  }
+
+  function updateMeter() {
+    const n = session.countUserMessages();
+    $('turnlabel').textContent = `${Math.min(n + 1, MAX_TURNS)} / ${MAX_TURNS} tur`;
+    $('pfill').style.width = `${Math.min(100, (n / MAX_TURNS) * 100)}%`;
+  }
+
+  function renderMsg() {
+    const msg = $('msg');
+    const hint = $('hint');
+    const st = session.state;
+    const last = lastAssistant();
+
+    if (st === 'thinking' || !last) {
+      msg.className = 'msg-card typing';
+      msg.innerHTML = `<div class="from">${escapeHtml(friend.name.toLocaleUpperCase('tr-TR'))}</div><div class="text"><span class="dots"><span></span><span></span><span></span></span> ${escapeHtml(friend.name)} yazıyor…</div>`;
+      hint.style.display = 'none';
+      return;
+    }
+
+    msg.className = 'msg-card';
+    msg.innerHTML = `
+      <div class="from">${escapeHtml(friend.name.toLocaleUpperCase('tr-TR'))}</div>
+      <div class="text">${escapeHtml(last.text)}</div>
+      ${last.tr ? `<div class="tr">🇹🇷 ${escapeHtml(last.tr)}</div>` : ''}
+      <div class="row">
+        <button class="btn-soft" id="replay">${icon('speaker', 18)} Tekrar dinle</button>
+        <button class="meta" id="speed" style="background:none;color:var(--muted);font-weight:700;font-size:.78rem">${slow ? 'Yavaş hız' : 'Normal hız'} ⇄</button>
+      </div>`;
+    msg.querySelector('#replay').addEventListener('click', () => {
+      if (st === 'speaking') return;
+      session.speakSample(last.text, info.ttsLang, { rate: slow ? 0.78 : 1.0, voiceURI: undefined });
     });
-    transcript.scrollTop = transcript.scrollHeight;
-  }
+    msg.querySelector('#speed').addEventListener('click', () => {
+      slow = !slow;
+      session.rateOverride = slow ? 0.8 : null;
+      msg.querySelector('#speed').textContent = `${slow ? 'Yavaş hız' : 'Normal hız'} ⇄`;
+    });
 
-  function renderCorrection(c) {
-    const card = el(`
-      <div class="correction-card">
-        <div class="row"><span class="tag">✎ Sen:</span><span class="wrong">${escapeHtml(c.original)}</span></div>
-        <div class="row"><span class="tag">✓ Doğrusu:</span><span class="right">${escapeHtml(c.corrected)}</span></div>
-        ${c.explanation_tr ? `<div class="row"><span class="tag">ℹ</span><span class="explain">${escapeHtml(c.explanation_tr)}</span></div>` : ''}
-        ${c.practice_topic_tr ? `<div class="row"><span class="tag">📚 Çalış:</span><span class="explain"><b>${escapeHtml(c.practice_topic_tr)}</b>${c.type ? ` · ${c.type === 'vocabulary' ? 'kelime' : 'gramer'}` : ''}</span></div>` : ''}
-        ${c.alternative ? `<div class="row"><span class="tag">→ Daha doğalı:</span><span class="alt">${escapeHtml(c.alternative)}</span></div>` : ''}
-      </div>`);
-    const listen = el(`<div class="row" style="margin-top:6px"><button class="btn ghost small">🔊 Doğrusunu dinle</button></div>`);
-    listen.querySelector('button').addEventListener('click', () =>
-      session.speakSample(c.corrected, info.ttsLang, { rate: 0.85, voiceURI: config.voiceURI })
-    );
-    card.appendChild(listen);
-    return card;
-  }
-
-  // ── Durum çubuğu & mikrofon görünümü ───────────────────────────
-  function updateUi() {
-    const state = session.state;
-    const label = customStatus ? STATUS_LABELS[customStatus] : STATUS_LABELS[state] || '…';
-    statusLabel.textContent = label;
-    statusPill.className = 'status-pill ' + (customStatus ? 'thinking' : state);
-
-    micBtn.classList.toggle('listening', !customStatus && state === 'listening');
-    micBtn.classList.toggle('speaking', !customStatus && state === 'speaking');
-    micBtn.classList.toggle('thinking', !customStatus && state === 'thinking');
-    micBtn.classList.toggle('paused', state === 'paused');
-    micBtn.innerHTML = state === 'speaking' && !customStatus
-      ? '<span class="eq"><span></span><span></span><span></span><span></span></span>'
-      : icon('mic');
-    if (state === 'paused') {
-      $('interim').textContent = '';
-      $('done-btn').style.display = 'none';
+    const userTurn = (st === 'ready' || st === 'listening' || st === 'paused') && !finished;
+    if (userTurn && last.hint && last.hint.phrase) {
+      hint.style.display = '';
+      hint.innerHTML = `
+        <span style="color:var(--yellow-deep)">${icon('bulb', 26)}</span>
+        <span style="flex:1"><span class="cap2">Bir başlangıç istersen…</span>
+          <b>“${escapeHtml(last.hint.phrase)}”</b>
+          ${last.hint.meaning_tr ? `<small>${escapeHtml(last.hint.meaning_tr)}</small>` : ''}</span>
+        <span style="color:var(--yellow-deep)">${icon('speaker', 20)}</span>`;
+      hint.onclick = () => session.speakSample(last.hint.phrase, info.ttsLang, { rate: slow ? 0.78 : 1.0 });
+    } else {
+      hint.style.display = 'none';
     }
   }
 
-  // ── Kontroller ─────────────────────────────────────────────────
-  $('done-btn').addEventListener('click', () => session.finishNow());
+  function updateUi() {
+    const st = session.state;
+    const n = session.countUserMessages();
+    const busy = st === 'thinking' || st === 'speaking';
+    $('halo').className = 'mic-halo' + (st === 'listening' ? ' listening' : busy ? ' busy' : '');
+    ['wl', 'wr'].forEach((id) => $(id).classList.toggle('live', st === 'listening'));
+    if (st !== 'listening') $('live').textContent = '';
+    const help = {
+      thinking: `${friend.name} düşünüyor…`,
+      speaking: `${friend.name} konuşuyor… (atlamak için dokun)`,
+      ready: n === 0 ? 'Mikrofona dokun, sohbet başlasın.' : 'Mikrofona dokun ve cevabını söyle.',
+      listening: 'Dinliyorum… Bitirince mikrofona tekrar dokun.',
+      paused: 'Mikrofon kullanılamadı. Mesajı okuyup tekrar dene.',
+      idle: '',
+    };
+    $('help').textContent = help[st] ?? '';
+  }
 
-  micBtn.addEventListener('click', () => {
-    if (helpOpen) return;
-    if (session.state === 'paused') session.resume();
-    else session.pause();
+  // ── Mikrofon ───────────────────────────────────────────────────
+  $('mic').addEventListener('click', () => {
+    const st = session.state;
+    if (st === 'ready' || st === 'paused') session.startMic();
+    else if (st === 'listening') session.finishNow();
+    else if (st === 'speaking') stopSpeaking(); // konuşmayı atla
   });
 
-  $('diff-select').addEventListener('change', (e) => {
-    session.opts.difficulty = e.target.value;
-    config.difficulty = e.target.value;
-    const names = { easy: 'Kolay', medium: 'Orta', hard: 'Zor' };
-    toast('Zorluk güncellendi: ' + names[e.target.value]);
-  });
+  $('back').addEventListener('click', () => (session.countUserMessages() > 0 ? session.end() : navigate('friends')));
+  $('end').addEventListener('click', () => (session.countUserMessages() > 0 ? session.end() : navigate('friends')));
 
-  const confirmEnd = () => {
-    modal({
-      title: 'Seansı bitir?',
-      sub: 'Analiz ekranına geçeceğiz.',
-      actions: [
-        { label: 'Vazgeç', class: 'ghost' },
-        { label: 'Evet, bitir', class: 'primary', onClick: () => session.end() },
-      ],
-    });
-  };
-  $('end-btn').addEventListener('click', confirmEnd);
-  $('exit-btn').addEventListener('click', confirmEnd);
-
-  // ── Yardım butonu ──────────────────────────────────────────────
-  $('help-btn').addEventListener('click', () => {
-    if (helpOpen || session.ended) return;
-    helpOpen = true;
-    customStatus = 'help';
-    session.helpActive = true;
+  // ── Sohbet sonu ────────────────────────────────────────────────
+  async function openSummary() {
+    if (finished) return;
+    finished = true;
     session.stopMic();
     stopSpeaking();
-    updateUi();
+    const turns = session.countUserMessages();
+    if (turns === 0) { navigate('friends'); return; }
 
-    const content = el(`
-      <div>
-        <div class="field" style="margin-bottom:12px">
-          <textarea id="help-input" placeholder="Ne söylemek istiyorsun? Türkçe veya ${info.name} yazabilirsin. Örn: hesabı bölmek istiyorum"></textarea>
-        </div>
-        <button class="btn primary small" id="help-go" style="width:100%">Öneri getir</button>
-        <div id="help-result"></div>
-      </div>`);
+    const earned = 20;
+    addPoints(earned);
+    sheetRef = openSheet(`
+      <h2>Güzel sohbet! ✨</h2>
+      <div class="earn">${icon('star', 18)} +${earned} puan</div>
+      <p class="sub" id="sum">Notların hazırlanıyor…</p>
+      <div id="topics"></div>
+      <button class="btn-primary" id="home" style="margin-top:8px">Bahçeme dön ${icon('arrow', 22, 2.4)}</button>
+      <button class="end-link" id="again" style="margin-top:14px">Arkadaşlara dön</button>`);
+    const q = (id) => sheetRef.sheet.querySelector('#' + id);
+    q('home').addEventListener('click', () => navigate('home'));
+    q('again').addEventListener('click', () => navigate('friends'));
 
-    const closeHelp = () => {
-      helpOpen = false;
-      customStatus = null;
-      session.helpActive = false;
-      closeModal();
-      updateUi();
-      // 'thinking' durumunda cevap gelince akış kendisi mikrofonu açar;
-      // dinleme veya yarıda kalan konuşma durumunda hemen aç.
-      if (!session.ended && (session.state === 'listening' || session.state === 'speaking')) {
-        session.startMic();
-      }
-    };
-
-    const m = modal({
-      title: '💡 Konuşma Yardımı',
-      sub: `Söylemek istediğin ifadeyi ${info.name} olarak öneririm, anlamı ve telaffuzuyla.`,
-      content,
-      actions: [{ label: 'Kapat ve sohbete dön', class: 'ghost', onClick: () => {} }],
+    let topics = [];
+    try {
+      const a = await api.analyze(session.buildAnalysisPayload());
+      q('sum').textContent = a.summary_tr || 'Güzel bir pratikti, devam et!';
+      topics = (a.practice_topics || []).slice(0, 2);
+      q('topics').innerHTML = topics.length
+        ? '<h3 style="margin:6px 0 10px">Çalışılacak konular</h3>' + topics.map((t) => `
+            <div class="topic"><b>${escapeHtml(t.topic_tr)}</b>
+              ${t.example ? `<div class="ex"><s>${escapeHtml(t.example.wrong)}</s> → <strong>${escapeHtml(t.example.right)}</strong></div>` : ''}
+              ${t.exercise_tr ? `<div class="ex" style="margin-top:4px">${escapeHtml(t.exercise_tr)}</div>` : ''}</div>`).join('')
+        : '';
+    } catch {
+      q('sum').textContent = 'Notlar şu an hazırlanamadı ama puanın hesabında.';
+    }
+    addSession({
+      date: new Date().toISOString(), lang, friend: friend.id, scene: scene.label, level,
+      turns, points: earned, topics: topics.map((t) => t.topic_tr),
     });
-    // backdrop tıklayınca da mikrofonu geri aç
-    m.addEventListener('click', (e) => {
-      if (e.target === m) closeHelp();
-    });
-    // "Kapat ve sohbete dön" butonu
-    m.querySelector('.modal-actions .btn').addEventListener('click', closeHelp);
+  }
 
-    const input = content.querySelector('#help-input');
-    input.focus();
-
-    const runHelp = async () => {
-      const intent = input.value.trim();
-      if (!intent) { toast('Ne söylemek istediğini yaz.'); return; }
-
-      const resultBox = content.querySelector('#help-result');
-      resultBox.innerHTML = '<div class="row" style="justify-content:center;padding:14px"><span class="loading-dots"><span></span><span></span><span></span></span></div>';
-
-      try {
-        const context = session.messages.slice(-6).map((x) => `${x.role === 'user' ? 'LEARNER' : 'PARTNER'}: ${x.text}`).join('\n');
-        const res = await api.help({ language: config.lang, level: config.level, intent, context });
-
-        resultBox.innerHTML = '';
-        const box = el(`
-          <div class="help-result">
-            <div class="phrase">${escapeHtml(res.phrase)}</div>
-            ${res.pronunciation ? `<div class="pron">Telaffuz: ${escapeHtml(res.pronunciation)}</div>` : ''}
-            ${res.meaning_tr ? `<div class="meaning">🇹🇷 ${escapeHtml(res.meaning_tr)}</div>` : ''}
-            <div id="help-alts"></div>
-            <div class="row" style="margin-top:12px">
-              <button class="btn ghost small" id="help-listen">🔊 Dinle</button>
-              <span class="spacer"></span>
-              <button class="btn primary small" id="help-use">Bunu söyle →</button>
-            </div>
-          </div>`);
-
-        (res.alternatives || []).forEach((a, i) => {
-          const alt = el(`
-            <div class="alt-row">
-              <b>${escapeHtml(a.phrase)}</b>
-              ${a.pronunciation ? ` <span style="color:var(--muted);font-style:italic">(${escapeHtml(a.pronunciation)})</span>` : ''}
-              <div style="font-size:.82rem;color:var(--text-soft)">${escapeHtml(a.meaning_tr || '')} <button class="alt-listen" style="color:var(--primary-deep);text-decoration:underline;font-size:.82rem">dinle</button></div>
-            </div>`);
-          alt.querySelector('.alt-listen').addEventListener('click', () =>
-            speak(a.phrase, info.ttsLang, { rate: 0.85, voiceURI: config.voiceURI })
-          );
-          box.querySelector('#help-alts').appendChild(alt);
-        });
-
-        box.querySelector('#help-listen').addEventListener('click', () =>
-          speak(res.phrase, info.ttsLang, { rate: 0.85, voiceURI: config.voiceURI })
-        );
-        box.querySelector('#help-use').addEventListener('click', () => {
-          const phrase = res.phrase;
-          closeHelp();
-          session.sendPreparedPhrase(phrase);
-        });
-
-        resultBox.appendChild(box);
-      } catch (e) {
-        resultBox.innerHTML = `<div class="banner error" style="margin:0">${escapeHtml(e.message)}</div>`;
-      }
-    };
-
-    content.querySelector('#help-go').addEventListener('click', runHelp);
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runHelp(); }
-    });
-  });
-
-  // ── Başlat ─────────────────────────────────────────────────────
+  updateMeter();
   updateUi();
-  renderTranscript();
+  renderMsg();
   session.begin();
 }

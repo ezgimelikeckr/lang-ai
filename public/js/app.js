@@ -1,56 +1,48 @@
 // ─────────────────────────────────────────────────────────────────
-// Uygulama girişi: API durumunu kontrol eder, ekranları yönlendirir.
+// Uygulama girişi: profil + günlük puan + ekran yönlendirme
 // ─────────────────────────────────────────────────────────────────
-import { appState } from './router.js';
+import { appState, navigate } from './router.js';
 import { api } from './api.js';
-import { ensureVoicesReady } from './speech.js';
-import { getSettings } from './storage.js';
+import { ensureVoicesReady, stopSpeaking } from './speech.js';
+import { getProfile, claimDailyPoints } from './storage.js';
+import { escapeHtml } from './ui.js';
 
+import * as languages from './screens/languages.js';
+import * as test from './screens/test.js';
+import * as result from './screens/result.js';
 import * as home from './screens/home.js';
-import * as setup from './screens/setup.js';
-import * as talk from './screens/talk.js';
-import * as analysis from './screens/analysis.js';
-import * as history from './screens/history.js';
-import * as vocab from './screens/vocab.js';
-import * as settings from './screens/settings.js';
+import * as friends from './screens/friends.js';
+import * as chat from './screens/chat.js';
+import * as progress from './screens/progress.js';
 
-const screens = { home, setup, talk, analysis, history, vocab, settings };
-
+const screens = { languages, test, result, home, friends, chat, progress };
 const app = document.getElementById('app');
 
 function render() {
-  // Ekran değişirken bekleyen TTS'i durdur
-  window.speechSynthesis?.cancel();
-
+  stopSpeaking(); // ekran değişirken bekleyen seslendirmeyi kes
   const mod = screens[appState.screen] || home;
   app.innerHTML = '';
-
-  // Ayarlar ekranı async (ses listesi bekliyor); diğerleri senkron
   Promise.resolve(mod.render(app, appState.params)).catch((e) => {
     console.error(e);
-    app.innerHTML = `<div class="screen"><div class="empty-state">
-      <div class="icon">😵</div><div>Ekran yüklenirken hata oluştu.</div>
-      <div style="font-size:.8rem;color:var(--muted);margin-top:6px">${String(e.message || e)}</div>
-    </div></div>`;
+    app.innerHTML = `<div class="screen no-tabs"><p class="empty">Ekran yüklenirken hata oluştu.<br><small>${escapeHtml(e.message || e)}</small></p></div>`;
   });
 }
 
 window.addEventListener('route', render);
 
 async function init() {
-  appState.settings = getSettings();
-
-  // API durumu (çevrimdışıysa da uygulama açılsın, uyarı gösterilsin)
   try {
     appState.status = await api.status();
   } catch {
-    appState.status = { configured: false, model: '', offline: true };
+    appState.status = { configured: false, offline: true };
   }
-
-  // Ses listesi arka plada ısıtılır (ayalar ekranı ve sohbet için)
   ensureVoicesReady();
 
-  render();
+  const profile = getProfile();
+  if (profile.onboarded) appState.dailyEarned = claimDailyPoints();
+
+  const params = profile.onboarded ? {} : {};
+  navigate(profile.onboarded ? 'home' : 'languages', params);
 }
 
 init();
