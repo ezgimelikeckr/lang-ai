@@ -13,8 +13,9 @@ import * as result from './screens/result.js';
 import * as home from './screens/home.js';
 import * as friends from './screens/friends.js';
 import * as chat from './screens/chat.js';
+import * as progress from './screens/progress.js';
 
-const screens = { languages, test, result, home, friends, chat};
+const screens = { languages, test, result, home, friends, chat, progress };
 const app = document.getElementById('app');
 
 function render() {
