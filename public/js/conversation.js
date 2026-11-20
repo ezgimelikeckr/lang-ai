@@ -4,7 +4,7 @@
 // ─────────────────────────────────────────────────────────────────
 
 import { api } from './api.js';
-import { LANGUAGES } from './storage.js';
+import { LANGUAGES } from './data.js';
 import { sttSupported, ttsSupported, createRecognizer, speak, stopSpeaking } from './speech.js';
 
 const RATES = { easy: 0.9, medium: 1.0, hard: 1.06 };
@@ -41,6 +41,7 @@ export class Session {
     this.timer = null;
     this.focus = null;       // {id, tr, kind} — seansın mini ders konusu
     this.persona = null;     // {id, name, emoji, voice, gender} — konuşma partneri karakteri
+    this.rateOverride = null; // arayüzden yavaş/normal hız seçimi
   }
 
   get langInfo() {
@@ -48,7 +49,7 @@ export class Session {
   }
 
   get ttsRate() {
-    return RATES[this.opts.difficulty] || 1;
+    return this.rateOverride || RATES[this.opts.difficulty] || 1;
   }
 
   setState(s) {
@@ -67,6 +68,7 @@ export class Session {
         language: this.opts.lang,
         focus: this.opts.focusId,
         persona: this.opts.personaId,
+        learnerName: this.opts.learnerName,
         history: [],
         start: true,
       });
@@ -82,11 +84,11 @@ export class Session {
       this.pushAssistant(res.reply, null, res.reply_tr, res.hint);
       if (this.state === 'paused') return;
       await this.speakReply(res.reply);
-      this.startMic();
+      this.afterSpeak();
     } catch (e) {
       if (this.ended) return;
       this.cb.onError?.(e.message);
-      this.startMic(); // kullanıcı yeniden denemek için konuşmaya devam edebilsin
+      this.afterSpeak(); // kullanıcı yeniden denemek için konuşmaya devam edebilsin
     }
   }
 
@@ -205,9 +207,43 @@ export class Session {
     this.tryStartRec();
   }
 
-  /** "Bitirdim" düğmesi: sessizliği beklemeden konuştuğun metni hemen gönderir. */
+  /**
+   * Partner konuşmasını bitirince: tur sınırına ulaşıldıysa sohbeti bitir,
+   * dokunarak konuşma modunda ("ready") sırayı kullanıcıya bırak,
+   * aksi halde mikrofonu otomatik aç.
+   */
+  afterSpeak() {
+    if (this.ended) return;
+    if (this.opts.maxTurns && this.countUserMessages() >= this.opts.maxTurns) {
+      this.setState('ready');
+      this.cb.onLimitReached?.();
+      return;
+    }
+    if (this.opts.autoListen === false) {
+      this.setState('ready');
+      return;
+    }
+    this.startMic();
+  }
+
+  /** Mikrofon düğmesine ikinci dokunuş / "Bitirdim": konuştuğunu hemen gönder; hiçbir şey yoksa dinlemeyi bırak. */
   finishNow() {
-    if (this.state === 'listening' && this.rec && this.rec.flushNow) this.rec.flushNow();
+    if (this.state !== 'listening') return;
+    const text = this.rec && this.rec.flushNow ? this.rec.flushNow() : '';
+    if (!text) {
+      this.stopMic();
+      this.cb.onInterim?.('');
+      this.setState('ready');
+    }
+  }
+
+  /** Ekrandan çıkarken: her şeyi sessizce kapatır (geri çağrı yapmaz). */
+  dispose() {
+    this.ended = true;
+    this.wantListening = false;
+    this.stopTimer();
+    this.stopMic();
+    stopSpeaking();
   }
 
   stopMic() {
@@ -247,6 +283,8 @@ export class Session {
         language: this.opts.lang,
         focus: this.focus ? this.focus.id : undefined,
         persona: this.persona ? this.persona.id : undefined,
+        learnerName: this.opts.learnerName,
+        closing: Boolean(this.opts.maxTurns) && this.countUserMessages() >= this.opts.maxTurns,
         history,
         userMessage: text,
       });
@@ -266,12 +304,12 @@ export class Session {
       if (this.state === 'paused') return;
       await this.speakReply(res.reply);
       if (this.state === 'paused') return; // seslendirme sırasında duraklatıldıysa mikrofonu açma
-      this.startMic();
+      this.afterSpeak();
     } catch (e) {
       if (this.ended) return;
       this.cb.onError?.(e.message);
-      // Hata olsa da sohbeti kilitleme — dinlemeye dön
-      if (this.state !== 'paused') this.startMic();
+      // Hata olsa da sohbeti kilitleme — tekrar konuşabilsin
+      if (this.state !== 'paused') this.afterSpeak();
     }
   }
 

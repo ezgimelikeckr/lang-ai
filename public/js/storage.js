@@ -1,143 +1,70 @@
 // ─────────────────────────────────────────────────────────────────
-// localStorage katmanı — ayarlar, seans geçmişi (dil başına),
-// kelime defteri (dil başına). Her şey "kp_" önekiyle saklanır.
+// Yerel kayıt (localStorage): profil, diller, seviyeler, puanlar, sohbet geçmişi
 // ─────────────────────────────────────────────────────────────────
+const KEY = 'lingo:v1';
 
-export const LANGUAGES = {
-  en: { name: 'İngilizce', flag: '🇬🇧', sttLang: 'en-US', ttsLang: 'en-US', sample: 'Hello! How is your day going?' },
-  fr: { name: 'Fransızca', flag: '🇫🇷', sttLang: 'fr-FR', ttsLang: 'fr-FR', sample: 'Bonjour ! Comment ça va ?' },
-  es: { name: 'İspanyolca', flag: '🇪🇸', sttLang: 'es-ES', ttsLang: 'es-ES', sample: '¡Hola! ¿Cómo estás?' },
+const DEFAULTS = {
+  name: '',
+  languages: [],     // seçilme sırasına göre ['en', 'es']
+  active: null,      // şu an çalışılan dil
+  levels: {},        // { en: 'B1' }
+  points: 0,
+  lastVisit: '',     // son giriş günü (YYYY-MM-DD)
+  streak: 0,
+  sessions: [],      // son sohbetler
+  onboarded: false,
 };
 
-export const LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
-
-export const MODES = {
-  daily: { label: 'Günlük Sohbet', icon: '☕', desc: 'Arkadaş gibi doğal diyalog' },
-  free: { label: 'Serbest Konuşma', icon: '🎈', desc: 'Konu seçmeden, özgürce' },
-  roleplay: { label: 'Rol Yapma', icon: '🎭', desc: 'Restoran, otel, mülakat…' },
-  debate: { label: 'Fikir Alışverişi', icon: '💭', desc: 'Bir konuyu karşılıklı tartış' },
-  story: { label: 'Hikâye Anlatımı', icon: '📖', desc: 'Yapay zekâ başlatır, sen sürdür' },
-};
-
-export const SCENARIOS = {
-  restaurant: { label: 'Restoran', icon: '🍽️' },
-  hotel: { label: 'Otel', icon: '🏨' },
-  airport: { label: 'Havaalanı', icon: '✈️' },
-  shopping: { label: 'Alışveriş', icon: '🛍️' },
-  friends: { label: 'Arkadaşlık', icon: '👋' },
-  interview: { label: 'İş Görüşmesi', icon: '💼' },
-};
-
-const DEFAULT_SETTINGS = {
-  levels: { en: 'B1', fr: 'A2', es: 'A1' },
-  defaultDifficulty: 'medium',
-  defaultCorrectionMode: 'instant',
-  voices: {}, // dil → voiceURI
-};
-
-function read(key, fallback) {
+export function getProfile() {
   try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
-  }
+    const raw = localStorage.getItem(KEY);
+    if (raw) return { ...DEFAULTS, ...JSON.parse(raw) };
+  } catch { /* yoksay */ }
+  return { ...DEFAULTS, languages: [], levels: {}, sessions: [] };
 }
 
-function write(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
+export function saveProfile(p) {
+  try { localStorage.setItem(KEY, JSON.stringify(p)); } catch { /* yoksay */ }
+  return p;
 }
 
-// ── Ayarlar ──────────────────────────────────────────────────────
-export function getSettings() {
-  const s = read('kp_settings', {});
-  return {
-    ...DEFAULT_SETTINGS,
-    ...s,
-    levels: { ...DEFAULT_SETTINGS.levels, ...(s.levels || {}) },
-    voices: { ...(s.voices || {}) },
-  };
+export function updateProfile(fn) {
+  const p = getProfile();
+  const next = fn(p) || p;
+  return saveProfile(next);
 }
 
-export function updateSettings(patch) {
-  const s = { ...getSettings(), ...patch };
-  write('kp_settings', s);
-  return s;
+export function todayStr(d = new Date()) {
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+/** Günün ilk girişinde +10 puan verir. Verdiyse {earned, streak}, vermediyse null. */
+export function claimDailyPoints() {
+  const p = getProfile();
+  const today = todayStr();
+  if (p.lastVisit === today) return null;
+  const y = new Date(); y.setDate(y.getDate() - 1);
+  p.streak = p.lastVisit === todayStr(y) ? p.streak + 1 : 1;
+  p.lastVisit = today;
+  p.points += 10;
+  saveProfile(p);
+  return { earned: 10, streak: p.streak };
+}
+
+export function addPoints(n) {
+  return updateProfile((p) => { p.points += n; }).points;
 }
 
 export function setLevel(lang, level) {
-  const s = getSettings();
-  s.levels[lang] = level;
-  write('kp_settings', s);
-  return s;
-}
-
-export function setVoice(lang, voiceURI) {
-  const s = getSettings();
-  s.voices[lang] = voiceURI;
-  write('kp_settings', s);
-  return s;
-}
-
-// ── Seans geçmişi ────────────────────────────────────────────────
-export function getSessions(lang) {
-  return read(`kp_history_${lang}`, []);
-}
-
-export function saveSession(lang, session) {
-  const list = getSessions(lang);
-  list.unshift(session);
-  write(`kp_history_${lang}`, list.slice(0, 100)); // en fazla 100 seans
-}
-
-export function getSession(lang, id) {
-  return getSessions(lang).find((s) => s.id === id) || null;
-}
-
-export function deleteSession(lang, id) {
-  write(`kp_history_${lang}`, getSessions(lang).filter((s) => s.id !== id));
-}
-
-export function getLanguageStats(lang) {
-  const sessions = getSessions(lang);
-  return {
-    count: sessions.length,
-    totalSec: sessions.reduce((a, s) => a + (s.durationSec || 0), 0),
-    totalWords: sessions.reduce((a, s) => a + (s.userWords || 0), 0),
-  };
-}
-
-export function formatDuration(totalSec) {
-  const m = Math.floor(totalSec / 60);
-  const s = Math.round(totalSec % 60);
-  if (m >= 60) {
-    const h = Math.floor(m / 60);
-    return `${h} sa ${m % 60} dk`;
-  }
-  return m > 0 ? `${m} dk ${s} sn` : `${s} sn`;
-}
-
-// ── Kelime defteri ───────────────────────────────────────────────
-export function getVocab(lang) {
-  return read(`kp_vocab_${lang}`, []);
-}
-
-export function addVocab(lang, entry) {
-  const list = getVocab(lang);
-  // Aynı kelimeyi tekrar ekleme
-  if (list.some((e) => e.word.toLowerCase() === entry.word.toLowerCase())) return false;
-  list.unshift({
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    word: entry.word,
-    meaning: entry.meaning || '',
-    pronunciation: entry.pronunciation || '',
-    example: entry.example || '',
-    date: new Date().toISOString(),
+  updateProfile((p) => {
+    p.levels = { ...p.levels, [lang]: level };
+    p.active = lang;
+    p.onboarded = true;
   });
-  write(`kp_vocab_${lang}`, list);
-  return true;
 }
 
-export function deleteVocab(lang, id) {
-  write(`kp_vocab_${lang}`, getVocab(lang).filter((e) => e.id !== id));
+export function addSession(s) {
+  updateProfile((p) => { p.sessions = [s, ...p.sessions].slice(0, 30); });
 }

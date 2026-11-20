@@ -1,17 +1,26 @@
 // ─────────────────────────────────────────────────────────────────
-// Minik yönlendirici: ekran durumu + gezinme. Döngüsel içe aktarmayı
-// önlemek için app.js ve ekranlar bu modül üzerinden konuşur.
+// Basit ekran yönlendirici. Ekranlar onCleanup ile temizlik işlevi kaydeder
+// (mikrofonu, seslendirmeyi ve sayaçları kapatmak için).
 // ─────────────────────────────────────────────────────────────────
-
 export const appState = {
   screen: 'home',
   params: {},
-  status: { configured: false, model: '', baseUrl: '' },
-  settings: null,
+  status: null,        // sunucu durumu (LLM bağlı mı?)
+  dailyEarned: null,   // bugün kazanılan giriş puanı
+  cleanup: null,
 };
 
+export function onCleanup(fn) {
+  appState.cleanup = fn;
+}
+
 export function navigate(screen, params = {}) {
+  if (typeof appState.cleanup === 'function') {
+    try { appState.cleanup(); } catch (e) { console.error(e); }
+  }
+  appState.cleanup = null;
   appState.screen = screen;
   appState.params = params;
-  window.dispatchEvent(new CustomEvent('route'));
+  window.dispatchEvent(new Event('route'));
+  window.scrollTo?.(0, 0);
 }

@@ -1,7 +1,6 @@
 // ─────────────────────────────────────────────────────────────────
 // Backend API istemcisi
 // ─────────────────────────────────────────────────────────────────
-
 async function post(path, body) {
   let res;
   try {
@@ -24,16 +23,7 @@ export const api = {
     if (!res.ok) throw new Error('Sunucu durumu alınamadı.');
     return res.json();
   },
-
-  chat(payload) {
-    return post('/api/chat', payload);
-  },
-
-  help(payload) {
-    return post('/api/help', payload);
-  },
-
-  analyze(payload) {
-    return post('/api/analyze', payload);
-  },
+  chat: (payload) => post('/api/chat', payload),
+  analyze: (payload) => post('/api/analyze', payload),
+  assess: (payload) => post('/api/assess', payload),
 };

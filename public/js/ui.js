@@ -1,8 +1,9 @@
 // ─────────────────────────────────────────────────────────────────
-// Küçük UI yardımcıları: DOM oluşturma, toast, modal, simgeler
+// Ortak arayüz yardımcıları: öğe oluşturma, simgeler, alt sekme çubuğu,
+// alt sayfa (sheet), bildirim, sahne arka planı
 // ─────────────────────────────────────────────────────────────────
+import { navigate } from './router.js';
 
-/** html string'inden eleman üretir: el(`<div class="x">…</div>`) */
 export function el(html) {
   const t = document.createElement('template');
   t.innerHTML = html.trim();
@@ -10,75 +11,76 @@ export function el(html) {
 }
 
 export function escapeHtml(s) {
-  return String(s ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;');
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-export function toast(message, type = 'info', ms = 3500) {
-  const t = el(`<div class="toast ${type}">${escapeHtml(message)}</div>`);
-  document.getElementById('toast-container').appendChild(t);
+const ICONS = {
+  leaf: '<path d="M5 19c0-9 5-14 14-14 0 9-5 14-14 14Z"/><path d="M5 19c3-4 6-7 10-9"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  back: '<path d="m15 5-7 7 7 7"/>',
+  star: '<path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1 5.9L12 16.9 6.8 19.7l1-5.9L3.5 9.7l5.9-.8L12 3.5Z"/>',
+  speaker: '<path d="M4 9.5v5h4l5 4v-13l-5 4H4Z"/><path d="M16.5 9a4 4 0 0 1 0 6"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/>',
+  home: '<path d="m4 11 8-6.5 8 6.5v8a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1v-8Z"/>',
+  people: '<circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19c.5-3.2 2.7-5 5.5-5s5 1.8 5.5 5"/><circle cx="17" cy="9.5" r="2.5"/><path d="M16 14.2c2.4-.3 4.1 1.1 4.5 4.3"/>',
+  chart: '<path d="M6 20V11M12 20V5M18 20v-6"/>',
+  bulb: '<path d="M9 17.5h6M10 20.5h4M12 3.5a6 6 0 0 0-3.6 10.8c.7.6 1.1 1.3 1.1 2.2h5c0-.9.4-1.6 1.1-2.2A6 6 0 0 0 12 3.5Z"/>',
+  chat: '<path d="M5 5.5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-7l-4 3v-3H5a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z"/><path d="M8 9.5h8M8 12.5h5"/>',
+  gift: '<rect x="4" y="9" width="16" height="11" rx="2"/><path d="M12 9v11M4 13h16M12 9c-2-4-6-3.5-5 0M12 9c2-4 6-3.5 5 0"/>',
+};
+
+export function icon(name, size = 22, stroke = 2) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+}
+
+export function brand() {
+  return `<div class="brand"><span class="logo" style="color:var(--green)">${icon('leaf', 22, 2.2)}</span><span>lingo</span></div>`;
+}
+
+export function toast(msg, type = 'info', ms = 4500) {
+  const box = document.getElementById('toast-container');
+  if (!box) return;
+  const t = el(`<div class="toast ${type === 'error' ? 'error' : ''}">${escapeHtml(msg)}</div>`);
+  box.appendChild(t);
   setTimeout(() => t.remove(), ms);
 }
 
-/** Basit onaylı modal. actions: [{label, class, onClick}] */
-export function modal({ title, sub, content, actions = [] }) {
-  const root = document.getElementById('modal-root');
-  const backdrop = el(`
-    <div class="modal-backdrop">
-      <div class="modal">
-        <h3>${escapeHtml(title)}</h3>
-        ${sub ? `<div class="modal-sub">${escapeHtml(sub)}</div>` : ''}
-        <div class="modal-content"></div>
-        <div class="modal-actions"></div>
-      </div>
-    </div>`);
-
-  const contentBox = backdrop.querySelector('.modal-content');
-  if (typeof content === 'string') contentBox.innerHTML = content;
-  else if (content) contentBox.appendChild(content);
-
-  const actionsBox = backdrop.querySelector('.modal-actions');
-  actions.forEach((a) => {
-    const b = el(`<button class="btn ${a.class || 'ghost'} small">${escapeHtml(a.label)}</button>`);
-    b.addEventListener('click', () => {
-      if (a.onClick) a.onClick(backdrop);
-      if (!a.keepOpen) backdrop.remove();
-    });
-    actionsBox.appendChild(b);
-  });
-
-  backdrop.addEventListener('click', (e) => {
-    if (e.target === backdrop && !actions.some((a) => a.blockBackdropClose)) backdrop.remove();
-  });
-
-  root.appendChild(backdrop);
-  return backdrop;
+/** Alt sekme çubuğu: Bahçem · Arkadaşlar · Gelişim */
+export function tabBar(active) {
+  const tabs = [
+    ['home', 'Bahçem', 'home'],
+    ['friends', 'Arkadaşlar', 'people'],
+    ['progress', 'Gelişim', 'chart'],
+  ];
+  const bar = el(`<nav class="tabbar">${tabs.map(([id, label, ic]) =>
+    `<button class="tab ${id === active ? 'on' : ''}" data-go="${id}">${icon(ic, 24)}<span>${label}</span></button>`).join('')}</nav>`);
+  bar.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => {
+    if (b.dataset.go !== active) navigate(b.dataset.go);
+  }));
+  return bar;
 }
 
-export function closeModal() {
-  const root = document.getElementById('modal-root');
-  root.innerHTML = '';
+/** Alttan açılan sayfa. İçerik bir HTML metni ya da öğe olabilir. */
+export function openSheet(content) {
+  const overlay = el('<div class="overlay"><div class="sheet"></div></div>');
+  const sheet = overlay.querySelector('.sheet');
+  if (typeof content === 'string') sheet.innerHTML = content; else sheet.appendChild(content);
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  return { overlay, sheet, close };
 }
 
-// ── SVG simgeleri ────────────────────────────────────────────────
-const icons = {
-  mic: '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>',
-  pause: '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>',
-  play: '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>',
-  stop: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>',
-  help: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
-  book: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
-  history: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
-  settings: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
-  speaker: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>',
-  back: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>',
-  plus: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
-  trash: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
-};
-
-export function icon(name) {
-  return `<span class="icon-${name}">${icons[name] || ''}</span>`;
+/** Tepeli, yumuşak yeşil sahne arka planı (SVG) */
+export function hillsSvg() {
+  return `<svg class="hills" viewBox="0 0 360 330" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+    <rect width="360" height="330" fill="#dbe9ea"/>
+    <ellipse cx="70" cy="62" rx="44" ry="14" fill="#f3f7f4"/><ellipse cx="300" cy="96" rx="40" ry="12" fill="#f3f7f4"/>
+    <path d="M0 190 Q70 130 150 175 T300 160 T360 175 V330 H0Z" fill="#bcd2b6"/>
+    <path d="M0 225 Q90 170 190 215 T360 205 V330 H0Z" fill="#a8c7a2"/>
+    <path d="M0 262 Q110 222 220 255 T360 248 V330 H0Z" fill="#d3e4c2"/>
+    <path d="M150 330 Q175 285 215 262 Q245 246 262 218" stroke="#f1ead2" stroke-width="22" fill="none" stroke-linecap="round" opacity=".9"/>
+    <g fill="#f3d86a"><circle cx="42" cy="285" r="3"/><circle cx="96" cy="300" r="3"/><circle cx="318" cy="292" r="3"/><circle cx="290" cy="312" r="3"/></g>
+  </svg>`;
 }

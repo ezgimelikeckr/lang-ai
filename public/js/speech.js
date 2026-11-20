@@ -219,6 +219,7 @@ export function createRecognizer(sttLang, handlers) {
     finalBuffer = '';
     interimBuffer = '';
     if (text && handlers.onFinal) handlers.onFinal(text);
+    return text;
   };
   rec.flushNow = flush;
 
@@ -237,8 +238,13 @@ export function createRecognizer(sttLang, handlers) {
     let interim = '';
     for (let i = event.resultIndex; i < event.results.length; i++) {
       const r = event.results[i];
-      if (r.isFinal) finalBuffer += r[0].transcript + ' ';
-      else interim += r[0].transcript;
+      if (r.isFinal) {
+        finalBuffer += r[0].transcript + ' ';
+        // Tanıyıcının güveni: telaffuzun ne kadar anlaşıldığının kaba bir göstergesi
+        if (handlers.onConfidence && typeof r[0].confidence === 'number' && r[0].confidence > 0) handlers.onConfidence(r[0].confidence);
+      } else {
+        interim += r[0].transcript;
+      }
     }
     interimBuffer = interim;
 
